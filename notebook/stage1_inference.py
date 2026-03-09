@@ -71,6 +71,9 @@ __all__ = [
     "display_image",
     "visualize_sparse_coords",
     "visualize_shape_features",
+    "compare_sparse_coords",
+    "create_rotating_gif",
+    "create_rotating_gif_comparison",
 ]
 
 # Safety filters for Hydra instantiation
@@ -1001,3 +1004,233 @@ def compare_sparse_coords(
     
     plt.tight_layout()
     return fig
+
+
+def create_rotating_gif(
+    voxel: np.ndarray,
+    output_path: str,
+    title: str = "Sparse Point Cloud",
+    color: str = "blue",
+    alpha: float = 0.7,
+    s: int = 2,
+    num_frames: int = 60,
+    fps: int = 15,
+    figsize: tuple = (8, 8),
+    elev: float = 20.0,
+    dpi: int = 100,
+):
+    """
+    创建稀疏点云的旋转 GIF 动画。
+    
+    Args:
+        voxel: (N, 3) 归一化坐标数组
+        output_path: 输出 GIF 文件路径
+        title: 图标题
+        color: 点颜色
+        alpha: 透明度
+        s: 点大小
+        num_frames: 动画帧数（默认 60 帧，360° 旋转）
+        fps: 帧率（默认 15 fps）
+        figsize: 图像尺寸
+        elev: 仰角（默认 20 度）
+        dpi: 图像分辨率
+    
+    Returns:
+        str: 输出文件路径
+    """
+    import imageio
+    
+    # 确保输出目录存在
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    
+    # 计算点云范围
+    max_range = np.array([
+        voxel[:, 0].max() - voxel[:, 0].min(),
+        voxel[:, 1].max() - voxel[:, 1].min(),
+        voxel[:, 2].max() - voxel[:, 2].min()
+    ]).max() / 2.0
+    
+    mid_x = (voxel[:, 0].max() + voxel[:, 0].min()) * 0.5
+    mid_y = (voxel[:, 1].max() + voxel[:, 1].min()) * 0.5
+    mid_z = (voxel[:, 2].max() + voxel[:, 2].min()) * 0.5
+    
+    # 根据点云大小自动调整点大小
+    num_points = len(voxel)
+    if s is None:
+        s = max(1, min(5, 50000 // num_points))
+    
+    # 生成帧
+    frames = []
+    angles = np.linspace(0, 360, num_frames, endpoint=False)
+    
+    for i, angle in enumerate(angles):
+        fig = plt.figure(figsize=figsize, dpi=dpi)
+        ax = fig.add_subplot(111, projection='3d')
+        
+        # 绘制点云
+        ax.scatter(
+            voxel[:, 0], voxel[:, 1], voxel[:, 2],
+            c=color, alpha=alpha, s=s
+        )
+        
+        # 设置视角
+        ax.view_init(elev=elev, azim=angle)
+        
+        # 设置坐标轴范围
+        ax.set_xlim(mid_x - max_range, mid_x + max_range)
+        ax.set_ylim(mid_y - max_range, mid_y + max_range)
+        ax.set_zlim(mid_z - max_range, mid_z + max_range)
+        
+        # 设置标签
+        ax.set_xlabel('X')
+        ax.set_ylabel('Y')
+        ax.set_zlabel('Z')
+        ax.set_title(f'{title}\nPoints: {num_points:,} | Frame: {i+1}/{num_frames}')
+        
+        # 设置背景色
+        ax.set_facecolor('white')
+        fig.patch.set_facecolor('white')
+        
+        # 移除网格线
+        ax.grid(True, alpha=0.3)
+        
+        # 转换为图像
+        fig.canvas.draw()
+        frame = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+        frame = frame.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+        frames.append(frame)
+        
+        plt.close(fig)
+        
+        # 打印进度
+        if (i + 1) % 10 == 0 or i == 0:
+            print(f"Generating frames: {i+1}/{num_frames}")
+    
+    # 保存 GIF
+    imageio.mimsave(output_path, frames, fps=fps, loop=0)
+    print(f"\nGIF saved to: {output_path}")
+    print(f"  - Frames: {num_frames}")
+    print(f"  - FPS: {fps}")
+    print(f"  - Duration: {num_frames/fps:.1f} seconds")
+    print(f"  - Points: {num_points:,}")
+    
+    return output_path
+
+
+def create_rotating_gif_comparison(
+    voxel_list: List[np.ndarray],
+    labels: List[str],
+    output_path: str,
+    colors: List[str] = None,
+    alpha: float = 0.7,
+    s: int = 2,
+    num_frames: int = 60,
+    fps: int = 15,
+    figsize_per_model: tuple = (6, 6),
+    elev: float = 20.0,
+    dpi: int = 100,
+):
+    """
+    创建多个稀疏点云的对比旋转 GIF 动画。
+    
+    Args:
+        voxel_list: 多个 (N, 3) 坐标数组列表
+        labels: 每个点云的标签
+        output_path: 输出 GIF 文件路径
+        colors: 每个点云的颜色
+        alpha: 透明度
+        s: 点大小
+        num_frames: 动画帧数
+        fps: 帧率
+        figsize_per_model: 每个模型的图像尺寸
+        elev: 仰角
+        dpi: 图像分辨率
+    
+    Returns:
+        str: 输出文件路径
+    """
+    import imageio
+    
+    n = len(voxel_list)
+    if colors is None:
+        import seaborn as sns
+        colors = sns.color_palette("husl", n)
+    
+    # 确保输出目录存在
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    
+    # 计算每个点云的范围
+    ranges = []
+    for voxel in voxel_list:
+        max_range = np.array([
+            voxel[:, 0].max() - voxel[:, 0].min(),
+            voxel[:, 1].max() - voxel[:, 1].min(),
+            voxel[:, 2].max() - voxel[:, 2].min()
+        ]).max() / 2.0
+        
+        mid_x = (voxel[:, 0].max() + voxel[:, 0].min()) * 0.5
+        mid_y = (voxel[:, 1].max() + voxel[:, 1].min()) * 0.5
+        mid_z = (voxel[:, 2].max() + voxel[:, 2].min()) * 0.5
+        
+        ranges.append((max_range, mid_x, mid_y, mid_z))
+    
+    # 生成帧
+    frames = []
+    angles = np.linspace(0, 360, num_frames, endpoint=False)
+    
+    for i, angle in enumerate(angles):
+        fig, axes = plt.subplots(1, n, figsize=(figsize_per_model[0] * n, figsize_per_model[1]), 
+                                  subplot_kw={'projection': '3d'}, dpi=dpi)
+        
+        if n == 1:
+            axes = [axes]
+        
+        for j, (voxel, label, color, (max_range, mid_x, mid_y, mid_z)) in enumerate(
+            zip(voxel_list, labels, colors, ranges)
+        ):
+            ax = axes[j]
+            
+            # 绘制点云
+            ax.scatter(
+                voxel[:, 0], voxel[:, 1], voxel[:, 2],
+                c=color, alpha=alpha, s=s
+            )
+            
+            # 设置视角
+            ax.view_init(elev=elev, azim=angle)
+            
+            # 设置坐标轴范围
+            ax.set_xlim(mid_x - max_range, mid_x + max_range)
+            ax.set_ylim(mid_y - max_range, mid_y + max_range)
+            ax.set_zlim(mid_z - max_range, mid_z + max_range)
+            
+            # 设置标签
+            ax.set_xlabel('X')
+            ax.set_ylabel('Y')
+            ax.set_zlabel('Z')
+            ax.set_title(f'{label}\nPoints: {len(voxel):,}')
+            
+            # 设置背景色
+            ax.set_facecolor('white')
+            ax.grid(True, alpha=0.3)
+        
+        fig.patch.set_facecolor('white')
+        plt.tight_layout()
+        
+        # 转换为图像
+        fig.canvas.draw()
+        frame = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+        frame = frame.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+        frames.append(frame)
+        
+        plt.close(fig)
+        
+        # 打印进度
+        if (i + 1) % 10 == 0 or i == 0:
+            print(f"Generating frames: {i+1}/{num_frames}")
+    
+    # 保存 GIF
+    imageio.mimsave(output_path, frames, fps=fps, loop=0)
+    print(f"\nGIF saved to: {output_path}")
+    
+    return output_path
