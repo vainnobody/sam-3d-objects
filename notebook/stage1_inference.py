@@ -198,6 +198,7 @@ class Stage1OnlyInference:
         self.ss_cfg_strength_pm = config.get("ss_cfg_strength_pm", 0.0)
         self.ss_condition_input_mapping = config.get("ss_condition_input_mapping", ["image"])
         self.pad_size = config.get("pad_size", 1.0)
+        self.downsample_ss_dist = config.get("downsample_ss_dist", 0)
         
         # 数据类型
         self.dtype = self._get_dtype(config.get("dtype", "bfloat16"))
@@ -649,25 +650,29 @@ class Stage1OnlyInference:
                 # 解码
                 shape_latent = return_dict["shape"]
                 ss = ss_decoder(
-                    shape_latent.permute(0, 2, 1).contiguous()
+                    shape_latent.permute(0, 2, 1)
+                    .contiguous()
+                    .view(shape_latent.shape[0], 8, 16, 16, 16)
                 )
                 
-                # 处理解码输出
-                return_dict["coords"] = ss.coords
-                return_dict["shape"] = shape_latent.permute(0, 2, 1)  # (B, 8, 16, 16, 16)
+                # 提取坐标
+                coords = torch.argwhere(ss > 0)[:, [0, 2, 3, 4]].int()
                 
-                # 下采样和裁剪
-                if self.pad_size < 1.0:
-                    return_dict = prune_sparse_structure(return_dict)
-                if ss_input_dict.get("downsample_ss_dist", 0) > 0:
-                    return_dict = downsample_sparse_structure(
-                        return_dict, 
-                        ss_input_dict["downsample_ss_dist"]
+                # 下采样输出
+                return_dict["coords_original"] = coords
+                original_shape = coords.shape
+                
+                if self.downsample_ss_dist > 0:
+                    coords = prune_sparse_structure(
+                        coords,
+                        max_neighbor_axes_dist=self.downsample_ss_dist,
                     )
                 
-                # 计算下采样因子
-                orig_coords = return_dict["coords_original"] if "coords_original" in return_dict else return_dict["coords"]
-                downsample_factor = orig_coords.shape[0] / return_dict["coords"].shape[0]
+                coords, downsample_factor = downsample_sparse_structure(coords)
+                logger.info(
+                    f"Downsampled coords from {original_shape[0]} to {coords.shape[0]}"
+                )
+                return_dict["coords"] = coords
                 return_dict["downsample_factor"] = downsample_factor
         
         # 恢复推理步数
