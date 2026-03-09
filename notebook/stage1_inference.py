@@ -474,16 +474,26 @@ class Stage1OnlyInference:
         """嵌入条件"""
         if condition_embedder is not None:
             # 如果 condition_embedder 是 EmbedderFuser，设置 force_drop_modalities 跳过 pointmap
+            # 同时需要为缺失的 pointmap 提供空张量（虽然会被 drop 掉）
             if hasattr(condition_embedder, 'force_drop_modalities'):
-                # 保存原始值
-                original_force_drop = condition_embedder.force_drop_modalities
+                # 检查需要哪些 kwargs
+                if hasattr(condition_embedder, 'embedder_list'):
+                    for embedder, kwargs_info in condition_embedder.embedder_list:
+                        for kwarg_name, _ in kwargs_info:
+                            if kwarg_name not in kwargs:
+                                # 为缺失的 kwargs 创建空张量
+                                if 'pointmap' in kwarg_name:
+                                    # 获取 image 的信息来创建正确形状的张量
+                                    image = kwargs.get('image', args[0] if args else None)
+                                    if image is not None:
+                                        B = image.shape[0]
+                                        H, W = image.shape[2], image.shape[3]
+                                        kwargs[kwarg_name] = torch.zeros(B, 3, H, W, device=image.device, dtype=image.dtype)
+                
                 # 强制跳过 pointmap 相关的 embedder
                 condition_embedder.force_drop_modalities = ['pointmap', 'rgb_pointmap']
-                tokens = condition_embedder(*args, **kwargs)
-                # 恢复原始值
-                condition_embedder.force_drop_modalities = original_force_drop
-            else:
-                tokens = condition_embedder(*args, **kwargs)
+            
+            tokens = condition_embedder(*args, **kwargs)
             return tokens, None, None
         return None, args, kwargs
     
