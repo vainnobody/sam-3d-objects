@@ -271,11 +271,16 @@ class Stage1OnlyInference:
     
     def _init_pose_decoder(self, ss_generator_config_path, pose_decoder_name):
         """初始化姿态解码器"""
-        config = OmegaConf.load(
-            os.path.join(self.workspace_dir, ss_generator_config_path)
-        )
-        pose_target_convention = config["module"]["pose_target_convention"]
-        return get_pose_decoder(pose_decoder_name, pose_target_convention)
+        if pose_decoder_name is None:
+            config = OmegaConf.load(
+                os.path.join(self.workspace_dir, ss_generator_config_path)
+            )
+            if "module" in config and "pose_target_convention" in config["module"]:
+                pose_decoder_name = config["module"]["pose_target_convention"]
+            else:
+                pose_decoder_name = "default"
+        logger.info(f"Using pose decoder: {pose_decoder_name}")
+        return get_pose_decoder(pose_decoder_name)
     
     def _init_ss_preprocessor(self, ss_preprocessor, ss_generator_config_path):
         """初始化图像预处理器"""
