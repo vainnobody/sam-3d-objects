@@ -53,6 +53,9 @@ from sam3d_objects.pipeline.inference_utils import (
     downsample_sparse_structure,
     prune_sparse_structure,
 )
+from sam3d_objects.data.dataset.tdfy.img_and_mask_transforms import (
+    get_mask,
+)
 from sam3d_objects.model.io import (
     load_model_from_checkpoint,
     filter_and_remove_prefix_state_dict_fn,
@@ -492,6 +495,67 @@ class Stage1OnlyInference:
             condition_kwargs = {}
         return condition_args, condition_kwargs
     
+    # ============== 预处理方法 ==============
+    
+    def image_to_float(self, image):
+        """将图像转换为浮点数"""
+        image = np.array(image)
+        image = image / 255
+        image = image.astype(np.float32)
+        return image
+    
+    def _apply_transform(self, input: torch.Tensor, transform):
+        """应用变换"""
+        for trans in transform:
+            input = trans(input)
+        return input
+    
+    def _preprocess_image_and_mask(self, rgb_image, mask_image, img_mask_joint_transform):
+        """预处理图像和掩码"""
+        for trans in img_mask_joint_transform:
+            rgb_image, mask_image = trans(rgb_image, mask_image)
+        return rgb_image, mask_image
+    
+    def preprocess_image(self, image, preprocessor):
+        """预处理图像"""
+        # canonical type is numpy
+        if not isinstance(image, np.ndarray):
+            image = np.array(image)
+
+        assert image.ndim == 3  # no batch dimension as of now
+        assert image.shape[-1] == 4  # rgba format
+        assert image.dtype == np.uint8  # [0,255] range
+
+        rgba_image = torch.from_numpy(self.image_to_float(image))
+        rgba_image = rgba_image.permute(2, 0, 1).contiguous()
+        rgb_image = rgba_image[:3]
+        rgb_image_mask = (get_mask(rgba_image, None, "ALPHA_CHANNEL") > 0).float()
+        processed_rgb_image, processed_mask = self._preprocess_image_and_mask(
+            rgb_image, rgb_image_mask, preprocessor.img_mask_joint_transform
+        )
+
+        # transform tensor to model input
+        processed_rgb_image = self._apply_transform(
+            processed_rgb_image, preprocessor.img_transform
+        )
+        processed_mask = self._apply_transform(
+            processed_mask, preprocessor.mask_transform
+        )
+
+        # full image, with only processing from the image
+        rgb_image = self._apply_transform(rgb_image, preprocessor.img_transform)
+        rgb_image_mask = self._apply_transform(
+            rgb_image_mask, preprocessor.mask_transform
+        )
+        item = {
+            "mask": processed_mask[None].to(self.device),
+            "image": processed_rgb_image[None].to(self.device),
+            "rgb_image": rgb_image[None].to(self.device),
+            "rgb_image_mask": rgb_image_mask[None].to(self.device),
+        }
+
+        return item
+    
     def sample_sparse_structure(
         self, 
         ss_input_dict: dict, 
@@ -631,7 +695,7 @@ class Stage1OnlyInference:
             rgba_image = image
         
         # 预处理
-        ss_input_dict = self.ss_preprocessor(rgba_image)
+        ss_input_dict = self.preprocess_image(rgba_image, self.ss_preprocessor)
         
         # 运行稀疏结构采样
         ss_return_dict = self.sample_sparse_structure(
