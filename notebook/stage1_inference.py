@@ -212,7 +212,7 @@ class Stage1OnlyInference:
             )
             
             # 2. Preprocessor
-            ss_preprocessor = config.get("ss_preprocessor", preprocess_utils.get_default_preprocessor())
+            ss_preprocessor = config.get("ss_preprocessor")
             self.ss_preprocessor = self._init_ss_preprocessor(
                 ss_preprocessor, config.ss_generator_config_path
             )
@@ -284,13 +284,22 @@ class Stage1OnlyInference:
     
     def _init_ss_preprocessor(self, ss_preprocessor, ss_generator_config_path):
         """初始化图像预处理器"""
-        config = OmegaConf.load(
-            os.path.join(self.workspace_dir, ss_generator_config_path)
-        )
-        tdfy_config = config["tdfy"]["val_preprocessor"]
-        if ss_preprocessor is None:
-            return preprocess_utils.get_default_preprocessor()
-        return ss_preprocessor
+        if ss_preprocessor is not None:
+            return ss_preprocessor
+        
+        # 尝试从配置加载
+        try:
+            config = OmegaConf.load(
+                os.path.join(self.workspace_dir, ss_generator_config_path)
+            )
+            if "tdfy" in config and "val_preprocessor" in config["tdfy"]:
+                return instantiate(config["tdfy"]["val_preprocessor"])
+        except Exception as e:
+            logger.warning(f"Failed to load preprocessor from config: {e}")
+        
+        # 使用默认预处理器
+        logger.info("Using default preprocessor")
+        return preprocess_utils.get_default_preprocessor()
     
     def _init_ss_generator(self, config_path, ckpt_path):
         """初始化稀疏结构生成器"""
