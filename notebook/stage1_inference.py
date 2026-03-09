@@ -304,22 +304,31 @@ class Stage1OnlyInference:
     def _init_ss_generator(self, config_path, ckpt_path):
         """初始化稀疏结构生成器"""
         config = OmegaConf.load(os.path.join(self.workspace_dir, config_path))
-        model = instantiate(config["module"])
+        model_config = config["module"]["generator"]["backbone"]
+        model = instantiate(model_config)
         
         # Load checkpoint
         ckpt_path = os.path.join(self.workspace_dir, ckpt_path)
+        state_dict_prefix_func = filter_and_remove_prefix_state_dict_fn(
+            "_base_models.generator."
+        )
+        
         if ckpt_path.endswith(".safetensors"):
             state_dict = load_file(ckpt_path)
+            state_dict = state_dict_prefix_func(state_dict)
+            model.load_state_dict(state_dict, strict=False)
         else:
-            state_dict = torch.load(ckpt_path, map_location="cpu")
+            model = load_model_from_checkpoint(
+                model,
+                ckpt_path,
+                strict=True,
+                device="cpu",
+                freeze=True,
+                eval=True,
+                state_dict_key="state_dict",
+                state_dict_fn=state_dict_prefix_func,
+            )
         
-        # Filter state dict
-        if "state_dict" in state_dict:
-            state_dict = state_dict["state_dict"]
-        state_dict_fn = filter_and_remove_prefix_state_dict_fn("")
-        state_dict = state_dict_fn(state_dict)
-        
-        model.load_state_dict(state_dict, strict=False)
         model = model.to(self.device).to(self.shape_model_dtype)
         model.eval()
         
@@ -328,21 +337,28 @@ class Stage1OnlyInference:
     def _init_ss_decoder(self, config_path, ckpt_path):
         """初始化 VAE 解码器"""
         config = OmegaConf.load(os.path.join(self.workspace_dir, config_path))
-        model = instantiate(config["module"])
+        # 删除可能存在的 pretrained_ckpt_path 避免加载问题
+        if "pretrained_ckpt_path" in config:
+            del config["pretrained_ckpt_path"]
+        
+        model = instantiate(config)
         
         # Load checkpoint
         ckpt_path = os.path.join(self.workspace_dir, ckpt_path)
         if ckpt_path.endswith(".safetensors"):
             state_dict = load_file(ckpt_path)
+            model.load_state_dict(state_dict, strict=False)
         else:
-            state_dict = torch.load(ckpt_path, map_location="cpu")
+            model = load_model_from_checkpoint(
+                model,
+                ckpt_path,
+                strict=True,
+                device="cpu",
+                freeze=True,
+                eval=True,
+                state_dict_key=None,  # 注意这里是 None
+            )
         
-        if "state_dict" in state_dict:
-            state_dict = state_dict["state_dict"]
-        state_dict_fn = filter_and_remove_prefix_state_dict_fn("")
-        state_dict = state_dict_fn(state_dict)
-        
-        model.load_state_dict(state_dict, strict=False)
         model = model.to(self.device).to(self.shape_model_dtype)
         model.eval()
         
@@ -351,27 +367,36 @@ class Stage1OnlyInference:
     def _init_ss_condition_embedder(self, config_path, ckpt_path):
         """初始化 DINO 条件嵌入器"""
         config = OmegaConf.load(os.path.join(self.workspace_dir, config_path))
-        model = instantiate(config["module"])
+        
+        # 检查是否有 condition_embedder 配置
+        if "condition_embedder" not in config.get("module", {}):
+            logger.info("No condition_embedder found in config, returning None")
+            return None
+        
+        model_config = config["module"]["condition_embedder"]["backbone"]
+        model = instantiate(model_config)
         
         # Load checkpoint
         ckpt_path = os.path.join(self.workspace_dir, ckpt_path)
+        state_dict_prefix_func = filter_and_remove_prefix_state_dict_fn(
+            "_base_models.condition_embedder."
+        )
+        
         if ckpt_path.endswith(".safetensors"):
             state_dict = load_file(ckpt_path)
+            state_dict = state_dict_prefix_func(state_dict)
+            model.load_state_dict(state_dict, strict=False)
         else:
-            state_dict = torch.load(ckpt_path, map_location="cpu")
-        
-        if "state_dict" in state_dict:
-            state_dict = state_dict["state_dict"]
-        
-        # Extract condition embedder weights
-        condition_embedder_state = {}
-        for k, v in state_dict.items():
-            if "condition_embedder" in k:
-                new_key = k.replace("condition_embedder.", "")
-                condition_embedder_state[new_key] = v
-        
-        if condition_embedder_state:
-            model.condition_embedder.load_state_dict(condition_embedder_state, strict=False)
+            model = load_model_from_checkpoint(
+                model,
+                ckpt_path,
+                strict=True,
+                device="cpu",
+                freeze=True,
+                eval=True,
+                state_dict_key="state_dict",
+                state_dict_fn=state_dict_prefix_func,
+            )
         
         model = model.to(self.device).to(self.shape_model_dtype)
         model.eval()
