@@ -214,11 +214,8 @@ class Stage1OnlyInference:
                 config.ss_generator_config_path, pose_decoder_name
             )
             
-            # 2. Preprocessor
-            ss_preprocessor = config.get("ss_preprocessor")
-            self.ss_preprocessor = self._init_ss_preprocessor(
-                ss_preprocessor, config.ss_generator_config_path
-            )
+            # 2. Preprocessor - 始终使用默认预处理器
+            self.ss_preprocessor = preprocess_utils.get_default_preprocessor()
             
             # 3. SS Generator
             ss_generator = self._init_ss_generator(
@@ -506,14 +503,15 @@ class Stage1OnlyInference:
     
     def _apply_transform(self, input: torch.Tensor, transform):
         """应用变换"""
-        for trans in transform:
-            input = trans(input)
+        if input is not None and transform is not None and transform != (None,):
+            input = transform(input)
         return input
     
     def _preprocess_image_and_mask(self, rgb_image, mask_image, img_mask_joint_transform):
         """预处理图像和掩码"""
-        for trans in img_mask_joint_transform:
-            rgb_image, mask_image = trans(rgb_image, mask_image)
+        if img_mask_joint_transform is not None and img_mask_joint_transform != (None,):
+            for trans in img_mask_joint_transform:
+                rgb_image, mask_image = trans(rgb_image, mask_image)
         return rgb_image, mask_image
     
     def preprocess_image(self, image, preprocessor):
