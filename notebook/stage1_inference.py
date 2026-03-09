@@ -316,7 +316,8 @@ class Stage1OnlyInference:
         # Filter state dict
         if "state_dict" in state_dict:
             state_dict = state_dict["state_dict"]
-        state_dict = filter_and_remove_prefix_state_dict_fn(state_dict, "")
+        state_dict_fn = filter_and_remove_prefix_state_dict_fn("")
+        state_dict = state_dict_fn(state_dict)
         
         model.load_state_dict(state_dict, strict=False)
         model = model.to(self.device).to(self.shape_model_dtype)
@@ -338,7 +339,8 @@ class Stage1OnlyInference:
         
         if "state_dict" in state_dict:
             state_dict = state_dict["state_dict"]
-        state_dict = filter_and_remove_prefix_state_dict_fn(state_dict, "")
+        state_dict_fn = filter_and_remove_prefix_state_dict_fn("")
+        state_dict = state_dict_fn(state_dict)
         
         model.load_state_dict(state_dict, strict=False)
         model = model.to(self.device).to(self.shape_model_dtype)
