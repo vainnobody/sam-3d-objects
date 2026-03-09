@@ -1094,10 +1094,12 @@ def create_rotating_gif(
         # 移除网格线
         ax.grid(True, alpha=0.3)
         
-        # 转换为图像
+        # 转换为图像 (兼容新版 matplotlib)
         fig.canvas.draw()
-        frame = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
-        frame = frame.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+        # 使用 buffer_rgba() 替代已弃用的 tostring_rgb()
+        frame = np.asarray(fig.canvas.buffer_rgba())
+        # 从 RGBA 转换为 RGB
+        frame = frame[:, :, :3]
         frames.append(frame)
         
         plt.close(fig)
@@ -1217,10 +1219,12 @@ def create_rotating_gif_comparison(
         fig.patch.set_facecolor('white')
         plt.tight_layout()
         
-        # 转换为图像
+        # 转换为图像 (兼容新版 matplotlib)
         fig.canvas.draw()
-        frame = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
-        frame = frame.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+        # 使用 buffer_rgba() 替代已弃用的 tostring_rgb()
+        frame = np.asarray(fig.canvas.buffer_rgba())
+        # 从 RGBA 转换为 RGB
+        frame = frame[:, :, :3]
         frames.append(frame)
         
         plt.close(fig)
