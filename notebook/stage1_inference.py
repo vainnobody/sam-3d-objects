@@ -658,6 +658,11 @@ class Stage1OnlyInference:
                 # 提取坐标
                 coords = torch.argwhere(ss > 0)[:, [0, 2, 3, 4]].int()
                 
+                # 保存形状潜在特征 (5D 格式)
+                return_dict["shape"] = shape_latent.permute(0, 2, 1).view(
+                    shape_latent.shape[0], 8, 16, 16, 16
+                )
+                
                 # 下采样输出
                 return_dict["coords_original"] = coords
                 original_shape = coords.shape
