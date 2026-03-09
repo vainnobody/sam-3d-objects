@@ -473,7 +473,17 @@ class Stage1OnlyInference:
     def embed_condition(self, condition_embedder, *args, **kwargs):
         """嵌入条件"""
         if condition_embedder is not None:
-            tokens = condition_embedder(*args, **kwargs)
+            # 如果 condition_embedder 是 EmbedderFuser，设置 force_drop_modalities 跳过 pointmap
+            if hasattr(condition_embedder, 'force_drop_modalities'):
+                # 保存原始值
+                original_force_drop = condition_embedder.force_drop_modalities
+                # 强制跳过 pointmap 相关的 embedder
+                condition_embedder.force_drop_modalities = ['pointmap', 'rgb_pointmap']
+                tokens = condition_embedder(*args, **kwargs)
+                # 恢复原始值
+                condition_embedder.force_drop_modalities = original_force_drop
+            else:
+                tokens = condition_embedder(*args, **kwargs)
             return tokens, None, None
         return None, args, kwargs
     
