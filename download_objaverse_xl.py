@@ -406,37 +406,41 @@ def load_annotations(download_dir: Path, logger: logging.Logger) -> pd.DataFrame
 
 
 # ============== 下载回调 ==============
-def create_callbacks(
-    logger: logging.Logger,
-    progress_tracker: ProgressTracker,
-    failed_recorder: FailedObjectsRecorder,
-    downloaded_count: List[int],  # 使用 list 作为可变引用
-):
-    """创建下载回调函数
+class DownloadCallbacks:
+    """可序列化的下载回调处理器
     
-    Args:
-        logger: 日志记录器
-        progress_tracker: 进度跟踪器
-        failed_recorder: 失败记录器
-        downloaded_count: 已下载计数器
-        
-    Returns:
-        回调函数字典
+    使用类方法代替嵌套函数，解决 multiprocessing pickle 序列化问题。
+    pickle 无法序列化嵌套函数（闭包），但可以序列化类方法。
+    
+    注意：logger 对象在多进程环境中无法直接使用，
+    回调中的日志输出会降级为静默处理。
     """
     
+    def __init__(
+        self, 
+        progress_tracker: ProgressTracker, 
+        failed_recorder: FailedObjectsRecorder
+    ):
+        self.progress_tracker = progress_tracker
+        self.failed_recorder = failed_recorder
+        self.downloaded_count = 0
+        self.modified_count = 0
+    
     def handle_found_object(
+        self,
         local_path: str,
         file_identifier: str,
         sha256: str,
         metadata: Dict[str, Any]
     ) -> None:
         """处理成功下载的对象"""
-        downloaded_count[0] += 1
-        if downloaded_count[0] % 100 == 0:
-            logger.info(f"已下载: {downloaded_count[0]:,} 个对象")
-            progress_tracker.update(downloaded_count[0], failed_recorder.count)
+        self.downloaded_count += 1
+        # 每 100 个对象更新一次进度
+        if self.downloaded_count % 100 == 0:
+            self.progress_tracker.update(self.downloaded_count, self.failed_recorder.count)
     
     def handle_modified_object(
+        self,
         local_path: str,
         file_identifier: str,
         new_sha256: str,
@@ -444,22 +448,21 @@ def create_callbacks(
         metadata: Dict[str, Any]
     ) -> None:
         """处理内容变更的对象"""
-        logger.warning(f"对象内容变更: {file_identifier}")
-        logger.warning(f"  旧 SHA256: {old_sha256[:16]}...")
-        logger.warning(f"  新 SHA256: {new_sha256[:16]}...")
-        downloaded_count[0] += 1
+        self.modified_count += 1
+        self.downloaded_count += 1
     
     def handle_missing_object(
+        self,
         file_identifier: str,
         sha256: str,
         metadata: Dict[str, Any]
     ) -> None:
         """处理缺失的对象"""
         source = metadata.get("source", "unknown")
-        failed_recorder.add_failed(file_identifier, sha256, source, "对象不存在")
-        logger.warning(f"对象不存在: {file_identifier}")
+        self.failed_recorder.add_failed(file_identifier, sha256, source, "对象不存在")
     
     def handle_new_object(
+        self,
         local_path: str,
         file_identifier: str,
         sha256: str,
@@ -467,13 +470,6 @@ def create_callbacks(
     ) -> None:
         """处理新发现的对象 (仅 GitHub)"""
         pass  # 不做特殊处理
-    
-    return {
-        "handle_found_object": handle_found_object,
-        "handle_modified_object": handle_modified_object,
-        "handle_missing_object": handle_missing_object,
-        "handle_new_object": handle_new_object,
-    }
 
 
 # ============== 批量下载 ==============
@@ -504,26 +500,18 @@ def download_objects(
     # 初始化进度
     progress_tracker.start(len(annotations))
     
-    # 计数器 (使用 list 作为可变引用)
-    downloaded_count = [0]
-    
-    # 创建回调函数
-    callbacks = create_callbacks(
-        logger, 
-        progress_tracker, 
-        failed_recorder,
-        downloaded_count
-    )
+    # 创建回调处理器 (使用类，可被 pickle 序列化)
+    callbacks = DownloadCallbacks(progress_tracker, failed_recorder)
     
     # 执行下载
     result = oxl.download_objects(
         objects=annotations,
         download_dir=str(download_dir),
         processes=processes,
-        handle_found_object=callbacks["handle_found_object"],
-        handle_modified_object=callbacks["handle_modified_object"],
-        handle_missing_object=callbacks["handle_missing_object"],
-        handle_new_object=callbacks["handle_new_object"],
+        handle_found_object=callbacks.handle_found_object,
+        handle_modified_object=callbacks.handle_modified_object,
+        handle_missing_object=callbacks.handle_missing_object,
+        handle_new_object=callbacks.handle_new_object,
     )
     
     # 更新最终进度
