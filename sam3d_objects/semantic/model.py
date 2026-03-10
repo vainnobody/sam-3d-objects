@@ -12,6 +12,10 @@ and DINOv2 features serve as keys/values.
 """
 
 import os
+
+# Skip sam3d_objects.init module which may not exist
+os.environ["LIDRA_SKIP_INIT"] = "true"
+
 import sys
 from typing import Optional, Dict, Tuple, Union
 

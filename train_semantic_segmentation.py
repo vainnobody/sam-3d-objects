@@ -11,6 +11,10 @@ For testing without real data:
 """
 
 import os
+
+# Skip sam3d_objects.init module which may not exist
+os.environ["LIDRA_SKIP_INIT"] = "true"
+
 import sys
 import argparse
 from pathlib import Path
