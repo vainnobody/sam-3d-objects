@@ -11,6 +11,7 @@ Objaverse-XL 是一个包含 10M+ 3D 对象的大型数据集。
 - 支持断点续传
 - 进度跟踪和日志记录
 - 错误处理和重试机制
+- 支持镜像站下载 (国内推荐)
 
 使用方法:
     # 完整下载
@@ -18,6 +19,9 @@ Objaverse-XL 是一个包含 10M+ 3D 对象的大型数据集。
 
     # 测试下载 (100个对象)
     python download_objaverse_xl.py --sample_size 100
+
+    # 使用 HuggingFace 镜像 (国内推荐)
+    python download_objaverse_xl.py --mirror huggingface
 
     # 指定进程数
     python download_objaverse_xl.py --processes 8
@@ -58,6 +62,43 @@ LOG_FILE = "download.log"
 # 数据来源
 SOURCES = ["github", "thingiverse", "sketchfab", "smithsonian"]
 
+# 镜像站配置
+# 各来源说明:
+# - Sketchfab: 所有文件从 HuggingFace 下载，只需 HF 镜像
+# - GitHub: 标注从 HF 下载，3D 文件通过 git clone 从 GitHub 下载
+# - Thingiverse: 标注从 HF 下载，3D 文件从 thingiverse.com 下载
+# - Smithsonian: 标注从 HF 下载，3D 文件从 3d-api.si.edu 下载
+MIRRORS = {
+    "none": {
+        "name": "不使用镜像",
+        "hf_endpoint": None,
+        "git_mirror": None,
+        "proxy": None,
+        "description": "直接访问原始地址",
+    },
+    "huggingface": {
+        "name": "HuggingFace 镜像",
+        "hf_endpoint": "https://hf-mirror.com",
+        "git_mirror": None,
+        "proxy": None,
+        "description": "仅 HuggingFace 镜像，适用于 Sketchfab 数据",
+    },
+    "china-full": {
+        "name": "国内完整镜像 (推荐)",
+        "hf_endpoint": "https://hf-mirror.com",
+        "git_mirror": "https://ghproxy.com",
+        "proxy": None,
+        "description": "HuggingFace + GitHub 镜像，适用于 GitHub 数据",
+    },
+    "proxy": {
+        "name": "使用代理",
+        "hf_endpoint": None,
+        "git_mirror": None,
+        "proxy": "http://127.0.0.1:7890",  # 默认代理，可通过 --proxy 参数覆盖
+        "description": "通过代理访问所有来源，适用于 Thingiverse/Smithsonian",
+    },
+}
+
 # ============== 日志设置 ==============
 def setup_logging(log_dir: Path) -> logging.Logger:
     """设置日志系统
@@ -96,6 +137,120 @@ def setup_logging(log_dir: Path) -> logging.Logger:
     logger.addHandler(console_handler)
     
     return logger
+
+
+# ============== 镜像站配置 ==============
+def setup_mirror(
+    mirror: str, 
+    logger: logging.Logger, 
+    proxy: Optional[str] = None
+) -> None:
+    """配置镜像站
+    
+    通过设置环境变量来实现镜像站访问
+    
+    Args:
+        mirror: 镜像站名称
+        logger: 日志记录器
+        proxy: 可选的代理地址，覆盖配置中的默认代理
+    """
+    if mirror not in MIRRORS:
+        logger.warning(f"未知镜像站: {mirror}，使用默认设置")
+        return
+    
+    mirror_config = MIRRORS[mirror]
+    
+    if mirror == "none":
+        logger.info("不使用镜像站，直接访问原始地址")
+        return
+    
+    logger.info(f"启用镜像站: {mirror_config['name']}")
+    logger.info(f"  说明: {mirror_config['description']}")
+    
+    # 设置 HuggingFace 镜像
+    hf_endpoint = mirror_config.get("hf_endpoint")
+    if hf_endpoint:
+        os.environ["HF_ENDPOINT"] = hf_endpoint
+        logger.info(f"  HF_ENDPOINT = {hf_endpoint}")
+    
+    # 设置 Git 镜像 (用于 GitHub 来源)
+    git_mirror = mirror_config.get("git_mirror")
+    if git_mirror:
+        setup_git_mirror(git_mirror, logger)
+    
+    # 设置代理
+    proxy_url = proxy or mirror_config.get("proxy")
+    if proxy_url:
+        setup_proxy(proxy_url, logger)
+
+
+def setup_git_mirror(git_mirror: str, logger: logging.Logger) -> None:
+    """配置 Git 镜像
+    
+    通过 git config 设置 URL 重写规则
+    
+    Args:
+        git_mirror: Git 镜像地址
+        logger: 日志记录器
+    """
+    import subprocess
+    
+    logger.info(f"  Git 镜像 = {git_mirror}")
+    
+    # 常见的 Git 镜像配置方式
+    # 方式1: 使用 URL 重写 (ghproxy 等)
+    if "ghproxy" in git_mirror or "mirror" in git_mirror:
+        # 设置 git config url 重写
+        try:
+            # 格式: git config --global url."https://ghproxy.com/https://github.com/".insteadOf "https://github.com/"
+            subprocess.run(
+                ["git", "config", "--global", 
+                 f"url.{git_mirror}/https://github.com/", 
+                 "insteadOf", "https://github.com/"],
+                check=True,
+                capture_output=True
+            )
+            logger.info(f"    已配置 git url 重写: {git_mirror}/https://github.com/ -> https://github.com/")
+        except subprocess.CalledProcessError as e:
+            logger.warning(f"    配置 git 镜像失败: {e}")
+    # 方式2: 使用其他镜像服务
+    else:
+        # 设置通用代理
+        logger.info(f"    Git 镜像已配置: {git_mirror}")
+
+
+def setup_proxy(proxy_url: str, logger: logging.Logger) -> None:
+    """配置代理
+    
+    通过环境变量设置 HTTP/HTTPS 代理
+    
+    Args:
+        proxy_url: 代理地址 (如 http://127.0.0.1:7890)
+        logger: 日志记录器
+    """
+    logger.info(f"  代理 = {proxy_url}")
+    
+    os.environ["HTTP_PROXY"] = proxy_url
+    os.environ["HTTPS_PROXY"] = proxy_url
+    os.environ["http_proxy"] = proxy_url
+    os.environ["https_proxy"] = proxy_url
+    
+    # 为 git 设置代理
+    import subprocess
+    try:
+        subprocess.run(
+            ["git", "config", "--global", "http.proxy", proxy_url],
+            check=True,
+            capture_output=True
+        )
+        subprocess.run(
+            ["git", "config", "--global", "https.proxy", proxy_url],
+            check=True,
+            capture_output=True
+        )
+        logger.info(f"    已配置 git 代理: {proxy_url}")
+    except subprocess.CalledProcessError as e:
+        logger.warning(f"    配置 git 代理失败: {e}")
 
 
 # ============== 进度管理 ==============
@@ -470,6 +625,31 @@ def main():
 
     # 使用已缓存的标注
     python download_objaverse_xl.py --skip_annotations
+
+镜像站配置:
+    # 不使用镜像 (默认)
+    python download_objaverse_xl.py --mirror none
+
+    # HuggingFace 镜像 (适用于 Sketchfab 数据)
+    python download_objaverse_xl.py --mirror huggingface
+
+    # 国内完整镜像 (HuggingFace + GitHub，推荐)
+    python download_objaverse_xl.py --mirror china-full
+
+    # 使用代理 (适用于 Thingiverse/Smithsonian)
+    python download_objaverse_xl.py --mirror proxy --proxy http://127.0.0.1:7890
+
+    # 自定义代理地址
+    python download_objaverse_xl.py --mirror none --proxy socks5://127.0.0.1:1080
+
+    # 测试 + 国内完整镜像
+    python download_objaverse_xl.py --sample_size 100 --mirror china-full
+
+数据来源说明:
+    - sketchfab: 仅需 HuggingFace 镜像
+    - github: 需要 HuggingFace + GitHub 镜像 (使用 china-full)
+    - thingiverse: 需要代理访问 thingiverse.com (使用 proxy)
+    - smithsonian: 需要代理访问 3d-api.si.edu (使用 proxy)
         """
     )
     
@@ -514,6 +694,19 @@ def main():
         default=42,
         help="随机种子 (用于采样)"
     )
+    parser.add_argument(
+        "--mirror",
+        type=str,
+        choices=list(MIRRORS.keys()),
+        default="none",
+        help=f"镜像站选择 (默认: none)。可选: {list(MIRRORS.keys())}"
+    )
+    parser.add_argument(
+        "--proxy",
+        type=str,
+        default=None,
+        help="代理地址，覆盖镜像配置中的默认代理 (如: http://127.0.0.1:7890)"
+    )
     
     args = parser.parse_args()
     
@@ -523,6 +716,9 @@ def main():
     
     # 设置日志
     logger = setup_logging(download_dir)
+    
+    # 配置镜像站
+    setup_mirror(args.mirror, logger, args.proxy)
     
     logger.info("="*60)
     logger.info("Objaverse-XL 数据集下载脚本")
