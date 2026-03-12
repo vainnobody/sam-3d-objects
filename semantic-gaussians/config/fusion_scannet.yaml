@@ -25,6 +25,7 @@ fusion:
   img_dim: [648, 484]
   num_workers: 8
   model_2d: openseg # choose from openseg, lseg, samclip, vlpart
+  clip_batch_size: 8
   depth: render # choose from image, render, surface, none
   depth_scale: 1000.0
   visibility_threshold: 0.05

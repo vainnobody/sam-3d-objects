@@ -83,9 +83,13 @@ def fuse_one_scene(config, model_2d):
 
                 # Call seg model to get per-pixel features
                 gt_path = view.image_path
+                feature_kwargs = {}
+                if config.fusion.model_2d.lower().replace("_", "") == "samclip":
+                    feature_kwargs["clip_batch_size"] = config.fusion.get("clip_batch_size", 8)
                 features = model_2d.extract_image_feature(
                     gt_path,
                     [config.fusion.img_dim[1], config.fusion.img_dim[0]],
+                    **feature_kwargs,
                 )
 
             ################################# Save relevancy maps from pretrained models ####################################

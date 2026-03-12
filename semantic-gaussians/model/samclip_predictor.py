@@ -45,7 +45,7 @@ class SAMCLIP:
         texts = [prefix_prompt + x.lower().replace(":", " ").replace("_", " ") for x in vocabulary]
         return texts
 
-    def extract_image_feature(self, img_dir, img_size=None):
+    def extract_image_feature(self, img_dir, img_size=None, clip_batch_size=8):
         """Extract per-pixel OpenSeg features.
         Only receives image path as input.
         """
@@ -55,13 +55,11 @@ class SAMCLIP:
         masks, masks_s, masks_m, masks_l = self.mask_generator.generate(image)
 
         sorted_masks = sorted(masks, key=lambda x: x["area"], reverse=True)
-        pad_imgs = []
         segs = []
-        scores = []
+        pad_imgs = []
         for mask in sorted_masks:
             bbox = mask["bbox"]
             seg_mask = mask["segmentation"]
-            score = mask["stability_score"] * mask["predicted_iou"]
             x1, y1 = int(bbox[0]), int(bbox[1])
             x2, y2 = int(bbox[0] + bbox[2]), int(bbox[1] + bbox[3])
             # h_thresh = int(image.shape[0] * 0.1)
@@ -80,22 +78,31 @@ class SAMCLIP:
                 pad[(w - h) // 2 : (w - h) // 2 + h, :, :] = crop
             pad_imgs.append(cv2.resize(pad, (336, 336)))
             segs.append(seg_mask)
-            scores.append(score)
 
         if len(pad_imgs) == 0:
             print("Error: no mask detected!")
             return torch.zeros((768, image.shape[0], image.shape[1]), dtype=torch.half)
 
-        pad_imgs = np.stack(pad_imgs, axis=0)  # B, H, W, 3
-        pad_imgs = torch.from_numpy(pad_imgs.astype("float32")).permute(0, 3, 1, 2) / 255.0
-        pad_imgs = torchvision.transforms.Normalize(
-            (0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711)
-        )(pad_imgs).cuda()
-
-        crop_features = self.clip_model.encode_image(pad_imgs).cpu()
         features = torch.zeros((768, image.shape[0], image.shape[1]), dtype=torch.half)
-        for idx, seg_mask in enumerate(segs):
-            features[:, seg_mask] += crop_features[idx].unsqueeze(1)  # * scores[idx]
+        batch_size = max(int(clip_batch_size), 1)
+        normalizer = torchvision.transforms.Normalize(
+            (0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711)
+        )
+
+        for start in range(0, len(pad_imgs), batch_size):
+            end = start + batch_size
+            batch_imgs = np.stack(pad_imgs[start:end], axis=0)
+            batch_imgs = torch.from_numpy(batch_imgs.astype("float32")).permute(0, 3, 1, 2) / 255.0
+            batch_imgs = normalizer(batch_imgs).cuda(non_blocking=True)
+
+            crop_features = self.clip_model.encode_image(batch_imgs).cpu()
+            for feature, seg_mask in zip(crop_features, segs[start:end]):
+                features[:, seg_mask] += feature.unsqueeze(1)
+
+            del batch_imgs
+            del crop_features
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
         features = features / (features.norm(dim=0, keepdim=True) + 1e-8)
 
