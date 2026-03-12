@@ -15,11 +15,10 @@ sceneLoadTypeCallbacks = {
 
 
 class SceneDataset(Dataset):
-    def __init__(self, scene_info, args, split="train", resolution_scale=1.0, load_images=True):
+    def __init__(self, scene_info, args, split="train", resolution_scale=1.0):
         self.scene_info = scene_info
         self.args = args
         self.resolution_scale = resolution_scale
-        self.load_images = load_images
         if split == "train":
             self.camera_info = scene_info.train_cameras
         elif split == "test":
@@ -31,11 +30,11 @@ class SceneDataset(Dataset):
         return len(self.camera_info)
 
     def __getitem__(self, index):
-        return loadCam(self.args, index, self.camera_info[index], self.resolution_scale, load_image=self.load_images)
+        return loadCam(self.args, index, self.camera_info[index], self.resolution_scale)
 
 
 class Scene:
-    def __init__(self, args, resolution_scales=[1.0], load_images=True):
+    def __init__(self, args, resolution_scales=[1.0]):
         self.train_cameras = {}
         self.test_cameras = {}
 
@@ -70,13 +69,9 @@ class Scene:
 
         for resolution_scale in resolution_scales:
             print("Loading Training Cameras...")
-            self.train_cameras[resolution_scale] = SceneDataset(
-                scene_info, args, "train", resolution_scale, load_images=load_images
-            )
+            self.train_cameras[resolution_scale] = SceneDataset(scene_info, args, "train", resolution_scale)
             print("Loading Test Cameras...")
-            self.test_cameras[resolution_scale] = SceneDataset(
-                scene_info, args, "test", resolution_scale, load_images=load_images
-            )
+            self.test_cameras[resolution_scale] = SceneDataset(scene_info, args, "test", resolution_scale)
 
     def getTrainCameras(self, scale=1.0):
         return self.train_cameras[scale]

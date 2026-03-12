@@ -12,7 +12,6 @@
 import torch
 from torch import nn
 import numpy as np
-from PIL import Image
 from utils.graphics_utils import getWorld2View2, getProjectionMatrix
 
 
@@ -53,11 +52,6 @@ class Camera(nn.Module):
         image_name,
         image_path,
         uid,
-        image_width=None,
-        image_height=None,
-        white_background=False,
-        resolution_scale=1.0,
-        downscale_ratio=1.0,
         trans=np.array([0.0, 0.0, 0.0]),
         scale=1.0,
         device="cuda",
@@ -75,23 +69,14 @@ class Camera(nn.Module):
         self.data_device = torch.device(device)
 
         self.image_path = image_path
-        self._original_image = None
-        self._white_background = white_background
-        self._resolution_scale = resolution_scale
-        self._downscale_ratio = downscale_ratio
+        self.original_image = image.clamp(0.0, 1.0)
+        self.image_width = self.original_image.shape[2]
+        self.image_height = self.original_image.shape[1]
 
-        if image is not None:
-            self._original_image = image.clamp(0.0, 1.0)
-            self.image_width = self._original_image.shape[2]
-            self.image_height = self._original_image.shape[1]
-
-            if gt_alpha_mask is not None:
-                self._original_image *= gt_alpha_mask
-            else:
-                self._original_image *= torch.ones((1, self.image_height, self.image_width))
+        if gt_alpha_mask is not None:
+            self.original_image *= gt_alpha_mask
         else:
-            self.image_width = int(image_width)
-            self.image_height = int(image_height)
+            self.original_image *= torch.ones((1, self.image_height, self.image_width))
 
         self.zfar = 100.0
         self.znear = 0.01
@@ -108,35 +93,8 @@ class Camera(nn.Module):
         ).squeeze(0)
         self.camera_center = self.world_view_transform.inverse()[3, :3]
 
-    @property
-    def original_image(self):
-        if self._original_image is None:
-            self._original_image = self._load_original_image()
-        return self._original_image
-
-    def _load_original_image(self):
-        bg = np.array([1, 1, 1]) if self._white_background else np.array([0, 0, 0])
-        image = Image.open(self.image_path)
-        im_data = np.array(image.convert("RGBA"))
-        norm_data = im_data / 255.0
-        arr = norm_data[:, :, :3] * norm_data[:, :, 3:4] + bg * (1 - norm_data[:, :, 3:4])
-        image = Image.fromarray(np.array(arr * 255.0, dtype=np.byte), "RGB")
-
-        orig_w, orig_h = image.size
-        global_down = 1 / self._downscale_ratio if self._downscale_ratio != -1 else 1
-        scale = float(global_down) * float(self._resolution_scale)
-        resolution = (int(orig_w / scale), int(orig_h / scale))
-
-        image_np = np.array(image.resize(resolution))
-        image_t = torch.from_numpy(image_np).permute(2, 0, 1).float() / 255.0
-        return image_t.clamp(0.0, 1.0)
-
-    def unload_image(self):
-        self._original_image = None
-
-    def cuda(self, load_image=True):
-        if load_image:
-            self._original_image = self.original_image.to(self.data_device)
+    def cuda(self):
+        self.original_image = self.original_image.to(self.data_device)
         self.world_view_transform = self.world_view_transform.to(self.data_device)
         self.projection_matrix = self.projection_matrix.to(self.data_device)
         self.full_proj_transform = self.full_proj_transform.to(self.data_device)

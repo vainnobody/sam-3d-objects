@@ -1,4 +1,5 @@
 import os
+import gc
 import torch
 import imageio
 import warnings
@@ -21,7 +22,7 @@ warnings.filterwarnings("ignore")
 
 
 def fuse_one_scene(config, model_2d):
-    scene = Scene(config.scene, load_images=False)
+    scene = Scene(config.scene)
     gaussians = GaussianModel(config.model.sh_degree)
 
     if config.model.dynamic:
@@ -64,9 +65,14 @@ def fuse_one_scene(config, model_2d):
             features_mapping = None
             depth = None
             mapping = None
+            mask = None
+            mask_k = None
+            mapper = None
+            weight = None
+            gt_path = None
             view = view[0]
             try:
-                view.cuda(load_image=False)
+                view.cuda()
                 mapper = PointCloudToImageMapper(
                     config.fusion.img_dim,
                     config.fusion.visibility_threshold,
@@ -148,12 +154,23 @@ def fuse_one_scene(config, model_2d):
                 gaussians._times[mask_k] += 1
                 gaussians._features_semantic[mask_k] += features_mapping[mask_k]
             finally:
-                view.unload_image()
+                if view is not None:
+                    view.original_image = view.original_image.cpu()
+                    view.world_view_transform = view.world_view_transform.cpu()
+                    view.projection_matrix = view.projection_matrix.cpu()
+                    view.full_proj_transform = view.full_proj_transform.cpu()
+                    view.camera_center = view.camera_center.cpu()
                 del features
                 del features_mapping
                 del depth
                 del mapping
+                del mask
+                del mask_k
+                del mapper
+                del weight
+                del gt_path
                 del view
+                gc.collect()
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
 
