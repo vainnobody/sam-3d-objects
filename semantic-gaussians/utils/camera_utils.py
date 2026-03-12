@@ -18,16 +18,12 @@ from utils.graphics_utils import fov2focal, focal2fov
 WARNED = False
 
 
-def loadCam(args, id, cam_info, resolution_scale):
+def loadCam(args, id, cam_info, resolution_scale, load_image=True):
     bg = np.array([1, 1, 1]) if args.white_background else np.array([0, 0, 0])
 
-    image = Image.open(cam_info.image_path)
-    im_data = np.array(image.convert("RGBA"))
-    norm_data = im_data / 255.0
-    arr = norm_data[:, :, :3] * norm_data[:, :, 3:4] + bg * (1 - norm_data[:, :, 3:4])
-    image = Image.fromarray(np.array(arr * 255.0, dtype=np.byte), "RGB")
-
-    orig_w, orig_h = image.size
+    image = None
+    loaded_mask = None
+    orig_w, orig_h = cam_info.width, cam_info.height
 
     if args.downscale_ratio == -1:
         if orig_w > 1600:
@@ -47,13 +43,18 @@ def loadCam(args, id, cam_info, resolution_scale):
     scale = float(global_down) * float(resolution_scale)
     resolution = (int(orig_w / scale), int(orig_h / scale))
 
-    resized_image_rgb = PILtoTorch(image, resolution)
+    gt_image = None
+    if load_image:
+        image = Image.open(cam_info.image_path)
+        im_data = np.array(image.convert("RGBA"))
+        norm_data = im_data / 255.0
+        arr = norm_data[:, :, :3] * norm_data[:, :, 3:4] + bg * (1 - norm_data[:, :, 3:4])
+        image = Image.fromarray(np.array(arr * 255.0, dtype=np.byte), "RGB")
+        resized_image_rgb = PILtoTorch(image, resolution)
 
-    gt_image = resized_image_rgb[:3, ...]
-    loaded_mask = None
-
-    if resized_image_rgb.shape[1] == 4:
-        loaded_mask = resized_image_rgb[3:4, ...]
+        gt_image = resized_image_rgb[:3, ...]
+        if resized_image_rgb.shape[1] == 4:
+            loaded_mask = resized_image_rgb[3:4, ...]
 
     return Camera(
         colmap_id=cam_info.uid,
@@ -66,6 +67,11 @@ def loadCam(args, id, cam_info, resolution_scale):
         image_name=cam_info.image_name,
         image_path=cam_info.image_path,
         uid=id,
+        image_width=resolution[0],
+        image_height=resolution[1],
+        white_background=args.white_background,
+        resolution_scale=resolution_scale,
+        downscale_ratio=args.downscale_ratio,
         device=args.device,
     )
 

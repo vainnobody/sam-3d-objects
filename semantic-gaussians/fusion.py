@@ -21,7 +21,7 @@ warnings.filterwarnings("ignore")
 
 
 def fuse_one_scene(config, model_2d):
-    scene = Scene(config.scene)
+    scene = Scene(config.scene, load_images=False)
     gaussians = GaussianModel(config.model.sh_degree)
 
     if config.model.dynamic:
@@ -66,7 +66,7 @@ def fuse_one_scene(config, model_2d):
             mapping = None
             view = view[0]
             try:
-                view.cuda()
+                view.cuda(load_image=False)
                 mapper = PointCloudToImageMapper(
                     config.fusion.img_dim,
                     config.fusion.visibility_threshold,
@@ -148,6 +148,7 @@ def fuse_one_scene(config, model_2d):
                 gaussians._times[mask_k] += 1
                 gaussians._features_semantic[mask_k] += features_mapping[mask_k]
             finally:
+                view.unload_image()
                 del features
                 del features_mapping
                 del depth
