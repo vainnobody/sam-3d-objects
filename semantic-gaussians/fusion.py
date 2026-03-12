@@ -54,25 +54,26 @@ def fuse_one_scene(config, model_2d):
         collate_fn=lambda x: x,
         num_workers=config.fusion.num_workers,
     )
+    xyz_cpu = gaussians._xyz.detach().cpu().numpy()
 
     # feature fusion
     with torch.no_grad():
-        vis_id = torch.zeros((gaussians._xyz.shape[0], len(views)), dtype=int)
+        vis_id = torch.zeros((gaussians._xyz.shape[0], len(views)), dtype=torch.bool)
         for idx, view in enumerate(tqdm(loader)):
             if idx % 5 != 0:
                 continue
             features = None
-            features_mapping = None
             depth = None
             mapping = None
-            mask = None
-            mask_k = None
+            visible_idx = None
+            rows = None
+            cols = None
+            visible_features = None
             mapper = None
             weight = None
             gt_path = None
             view = view[0]
             try:
-                view.cuda()
                 mapper = PointCloudToImageMapper(
                     config.fusion.img_dim,
                     config.fusion.visibility_threshold,
@@ -118,6 +119,7 @@ def fuse_one_scene(config, model_2d):
                     depth_path = os.path.join(config.scene.scene_path, "depth", view.image_name + ".png")
                     depth = imageio.v2.imread(depth_path) / config.fusion.depth_scale
                 elif config.fusion.depth == "render":
+                    view.cuda()
                     depth = (
                         render(
                             view,
@@ -138,21 +140,33 @@ def fuse_one_scene(config, model_2d):
                 mapping = np.ones([gaussians._xyz.shape[0], 4], dtype=int)
                 mapping[:, 1:4], weight = mapper.compute_mapping(
                     view.world_view_transform.cpu().numpy(),
-                    gaussians._xyz.cpu().numpy(),
+                    xyz_cpu,
                     depth,
                 )
-                if mapping[:, 3].sum() == 0:  # no points corresponds to this image, skip
+                visible_idx = np.flatnonzero(mapping[:, 3])
+                if visible_idx.size == 0:  # no points corresponds to this image, skip
                     continue
 
-                mapping = torch.from_numpy(mapping)
-                mask = mapping[:, 3]
-                vis_id[:, idx] = mask
-                features_mapping = features[:, mapping[:, 1], mapping[:, 2]]
-                features_mapping = features_mapping.permute(1, 0).cuda()
+                vis_id[visible_idx, idx] = True
+                rows = mapping[visible_idx, 1]
+                cols = mapping[visible_idx, 2]
+                if features.device.type == "cuda":
+                    row_idx = torch.as_tensor(rows, device=features.device, dtype=torch.long)
+                    col_idx = torch.as_tensor(cols, device=features.device, dtype=torch.long)
+                    visible_features = features[:, row_idx, col_idx].permute(1, 0)
+                else:
+                    visible_features = features[:, rows, cols].permute(1, 0).to(
+                        gaussians._features_semantic.device,
+                        non_blocking=True,
+                    )
 
-                mask_k = mask != 0
-                gaussians._times[mask_k] += 1
-                gaussians._features_semantic[mask_k] += features_mapping[mask_k]
+                visible_idx = torch.from_numpy(visible_idx).to(
+                    gaussians._features_semantic.device,
+                    dtype=torch.long,
+                    non_blocking=True,
+                )
+                gaussians._times[visible_idx] += 1
+                gaussians._features_semantic[visible_idx] += visible_features
             finally:
                 if view is not None:
                     view.original_image = view.original_image.cpu()
@@ -161,11 +175,12 @@ def fuse_one_scene(config, model_2d):
                     view.full_proj_transform = view.full_proj_transform.cpu()
                     view.camera_center = view.camera_center.cpu()
                 del features
-                del features_mapping
                 del depth
                 del mapping
-                del mask
-                del mask_k
+                del visible_idx
+                del rows
+                del cols
+                del visible_features
                 del mapper
                 del weight
                 del gt_path
