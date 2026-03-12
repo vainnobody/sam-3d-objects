@@ -32,7 +32,3 @@ fusion:
   n_split_points: 999999999 # train: 80000, eval: 999999999 (large enough)
   num_rand_file_per_scene: 1 # train: 5, eval: 1
   out_dir: "/PATH/TO/YOUR/OWN"
-  clip_batch_size: 32
-  view_stride: 5
-  low_vram: false
-  samclip_points_per_side: 32

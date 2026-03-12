@@ -46,11 +46,6 @@ def fuse_one_scene(config, model_2d):
     bg_color = [1] * model_2d.embedding_dim if config.scene.white_background else [0] * model_2d.embedding_dim
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
     views = scene.getTrainCameras()
-    view_stride = OmegaConf.select(config, "fusion.view_stride", default=5)
-    if view_stride is None or view_stride < 1:
-        view_stride = 1
-    xyz_cpu = gaussians._xyz.detach().cpu().numpy()
-    visible_points = torch.zeros(gaussians._xyz.shape[0], dtype=torch.bool)
 
     loader = DataLoader(
         views,
@@ -62,8 +57,9 @@ def fuse_one_scene(config, model_2d):
 
     # feature fusion
     with torch.no_grad():
+        vis_id = torch.zeros((gaussians._xyz.shape[0], len(views)), dtype=int)
         for idx, view in enumerate(tqdm(loader)):
-            if idx % view_stride != 0:
+            if idx % 5 != 0:
                 continue
             features = None
             features_mapping = None
@@ -142,21 +138,21 @@ def fuse_one_scene(config, model_2d):
                 mapping = np.ones([gaussians._xyz.shape[0], 4], dtype=int)
                 mapping[:, 1:4], weight = mapper.compute_mapping(
                     view.world_view_transform.cpu().numpy(),
-                    xyz_cpu,
+                    gaussians._xyz.cpu().numpy(),
                     depth,
                 )
                 if mapping[:, 3].sum() == 0:  # no points corresponds to this image, skip
                     continue
 
                 mapping = torch.from_numpy(mapping)
-                mask = mapping[:, 3].bool()
-                mask_k = mask
-                visible_idx = mask_k.nonzero(as_tuple=False).squeeze(1)
-                visible_points[visible_idx] = True
-                features_mapping = features[:, mapping[visible_idx, 1], mapping[visible_idx, 2]].permute(1, 0).cuda()
+                mask = mapping[:, 3]
+                vis_id[:, idx] = mask
+                features_mapping = features[:, mapping[:, 1], mapping[:, 2]]
+                features_mapping = features_mapping.permute(1, 0).cuda()
 
-                gaussians._times[visible_idx] += 1
-                gaussians._features_semantic[visible_idx] += features_mapping.float()
+                mask_k = mask != 0
+                gaussians._times[mask_k] += 1
+                gaussians._features_semantic[mask_k] += features_mapping[mask_k]
             finally:
                 if view is not None:
                     view.original_image = view.original_image.cpu()
@@ -180,6 +176,7 @@ def fuse_one_scene(config, model_2d):
 
         gaussians._times[gaussians._times == 0] = 1e-5
         gaussians._features_semantic /= gaussians._times
+        point_ids = torch.unique(vis_id.nonzero(as_tuple=False)[:, 0])
 
         ################################ Save relevancy maps from projected gaussians #################################
         # relevancy_save_path = os.path.join(config.model.model_dir, "render", "relevancy")
@@ -278,7 +275,9 @@ def fuse_one_scene(config, model_2d):
 
             mask_entire = torch.zeros(gaussians._xyz.shape[0], dtype=torch.bool)
             mask_entire[rand_ind] = True
-            mask_entire = mask_entire & visible_points
+            mask = torch.zeros(gaussians._xyz.shape[0], dtype=torch.bool)
+            mask[point_ids] = True
+            mask_entire = mask_entire & mask
 
             torch.save(
                 {
@@ -309,13 +308,7 @@ if __name__ == "__main__":
     elif model_2d_name == "samclip":
         from model.samclip_predictor import SAMCLIP
 
-        model_2d = SAMCLIP(
-            "./weights/groundingsam/sam_vit_h_4b8939.pth",
-            "ViT-L/14@336px",
-            points_per_side=OmegaConf.select(config, "fusion.samclip_points_per_side", default=32),
-            clip_batch_size=OmegaConf.select(config, "fusion.clip_batch_size", default=32),
-            low_vram=OmegaConf.select(config, "fusion.low_vram", default=False),
-        )
+        model_2d = SAMCLIP("./weights/groundingsam/sam_vit_h_4b8939.pth", "ViT-L/14@336px")
     elif model_2d_name == "vlpart":
         from model.vlpart_predictor import VLPart
 
