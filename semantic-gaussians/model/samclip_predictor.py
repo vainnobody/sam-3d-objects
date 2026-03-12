@@ -10,7 +10,7 @@ from segment_anything.automask import SamAutomaticMaskGenerator as MultiScaleMas
 class SAMCLIP:
     embedding_dim = 768
     
-    def __init__(self, sam_path, clip_model_name, points_per_side=32, clip_batch_size=8, low_vram=True):
+    def __init__(self, sam_path, clip_model_name, points_per_side=32, clip_batch_size=32, low_vram=False):
         self.clip_batch_size = max(1, int(clip_batch_size))
         self.low_vram = low_vram
         if sam_path is not None:
@@ -98,7 +98,7 @@ class SAMCLIP:
             crop_features.append(chunk_features.float().cpu())
             del pad_imgs_chunk
             del chunk_features
-            if torch.cuda.is_available():
+            if self.low_vram and torch.cuda.is_available():
                 torch.cuda.empty_cache()
         crop_features = torch.cat(crop_features, dim=0)
         features = torch.zeros((768, image.shape[0], image.shape[1]), dtype=torch.half)

@@ -41,6 +41,8 @@ def fuse_one_scene(config, model_2d):
             )
         )
 
+    gaussians.create_semantic(model_2d.embedding_dim)
+
     bg_color = [1] * model_2d.embedding_dim if config.scene.white_background else [0] * model_2d.embedding_dim
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
     views = scene.getTrainCameras()
@@ -48,8 +50,6 @@ def fuse_one_scene(config, model_2d):
     if view_stride is None or view_stride < 1:
         view_stride = 1
     xyz_cpu = gaussians._xyz.detach().cpu().numpy()
-    features_semantic = torch.zeros((gaussians._xyz.shape[0], model_2d.embedding_dim), dtype=torch.float32)
-    times = torch.zeros((gaussians._xyz.shape[0], 1), dtype=torch.float32)
     visible_points = torch.zeros(gaussians._xyz.shape[0], dtype=torch.bool)
 
     loader = DataLoader(
@@ -153,10 +153,10 @@ def fuse_one_scene(config, model_2d):
                 mask_k = mask
                 visible_idx = mask_k.nonzero(as_tuple=False).squeeze(1)
                 visible_points[visible_idx] = True
-                features_mapping = features[:, mapping[visible_idx, 1], mapping[visible_idx, 2]].permute(1, 0)
+                features_mapping = features[:, mapping[visible_idx, 1], mapping[visible_idx, 2]].permute(1, 0).cuda()
 
-                times[visible_idx] += 1
-                features_semantic[visible_idx] += features_mapping.float()
+                gaussians._times[visible_idx] += 1
+                gaussians._features_semantic[visible_idx] += features_mapping.float()
             finally:
                 if view is not None:
                     view.original_image = view.original_image.cpu()
@@ -178,8 +178,8 @@ def fuse_one_scene(config, model_2d):
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
 
-        times[times == 0] = 1e-5
-        features_semantic /= times
+        gaussians._times[gaussians._times == 0] = 1e-5
+        gaussians._features_semantic /= gaussians._times
 
         ################################ Save relevancy maps from projected gaussians #################################
         # relevancy_save_path = os.path.join(config.model.model_dir, "render", "relevancy")
@@ -267,7 +267,7 @@ def fuse_one_scene(config, model_2d):
         if gaussians._xyz.shape[0] < config.fusion.n_split_points: # to handle point cloud numbers less than n_split_points
             torch.save(
             {
-                "feat": features_semantic.half(),
+                "feat": gaussians._features_semantic.cpu().half(),
                 "mask_full": torch.ones(gaussians._xyz.shape[0], dtype=torch.bool),
             },
             save_path
@@ -282,7 +282,7 @@ def fuse_one_scene(config, model_2d):
 
             torch.save(
                 {
-                    "feat": features_semantic[mask_entire].half(),
+                    "feat": gaussians._features_semantic[mask_entire].cpu().half(),
                     "mask_full": mask_entire,
                 },
                 save_path
@@ -313,8 +313,8 @@ if __name__ == "__main__":
             "./weights/groundingsam/sam_vit_h_4b8939.pth",
             "ViT-L/14@336px",
             points_per_side=OmegaConf.select(config, "fusion.samclip_points_per_side", default=32),
-            clip_batch_size=OmegaConf.select(config, "fusion.clip_batch_size", default=8),
-            low_vram=OmegaConf.select(config, "fusion.low_vram", default=True),
+            clip_batch_size=OmegaConf.select(config, "fusion.clip_batch_size", default=32),
+            low_vram=OmegaConf.select(config, "fusion.low_vram", default=False),
         )
     elif model_2d_name == "vlpart":
         from model.vlpart_predictor import VLPart
