@@ -7,6 +7,7 @@
 - `Mip-NeRF 360 / stump`
 - 下载脚本：`scripts/download_semantic_gaussians_sample.py`
 - 仅测试下载链路：`python scripts/download_semantic_gaussians_sample.py --test-download-mb 8`
+- 如果你已经拿到 sample 数据，并且要在现有 `sam3d-objects` conda 环境里补齐 `semantic-gaussians` 依赖，先读 `semantic_gaussians_sample_env_on_sam3d.md`
 
 ## 文件说明
 
@@ -32,6 +33,14 @@
   - 实现规格
   - 将方法拆成数据、几何先验、模型、损失、训练流程
   - 可直接作为第一版原型开发清单
+
+- `semantic_gaussians_sample_env_on_sam3d.md`
+  - 环境适配文档
+  - 说明如何基于现有 `sam3d-objects` conda 环境增量安装 `semantic-gaussians` sample 依赖
+
+- `semantic_gaussians_mipnerf360_runbook.md`
+  - 360 数据集跑通文档
+  - 说明如何在 Mip-NeRF 360 / COLMAP 数据上跑通 `train.py -> fusion.py` 主链路
 
 ## 当前仓库里的关键代码位置
 
