@@ -3,15 +3,16 @@ import clip
 import torch
 import torchvision
 import numpy as np
-import time
-from segment_anything import sam_model_registry, SamPredictor, SamAutomaticMaskGenerator
+from segment_anything import sam_model_registry, SamPredictor
 from segment_anything.automask import SamAutomaticMaskGenerator as MultiScaleMaskGenerator
 
 
 class SAMCLIP:
     embedding_dim = 768
     
-    def __init__(self, sam_path, clip_model_name):
+    def __init__(self, sam_path, clip_model_name, points_per_side=32, clip_batch_size=8, low_vram=True):
+        self.clip_batch_size = max(1, int(clip_batch_size))
+        self.low_vram = low_vram
         if sam_path is not None:
             print("Load SAM model...")
             sam = sam_model_registry["vit_h"](checkpoint=sam_path)
@@ -19,7 +20,7 @@ class SAMCLIP:
             self.sam = SamPredictor(sam)
             self.mask_generator = MultiScaleMaskGenerator(
                 model=sam,
-                points_per_side=32,
+                points_per_side=points_per_side,
                 pred_iou_thresh=0.7,
                 box_nms_thresh=0.7,
                 stability_score_thresh=0.85,
@@ -52,16 +53,14 @@ class SAMCLIP:
         image = cv2.imread(str(img_dir))
         image = cv2.resize(image, (img_size[1], img_size[0]))
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        masks, masks_s, masks_m, masks_l = self.mask_generator.generate(image)
+        masks, _, _, _ = self.mask_generator.generate(image)
 
         sorted_masks = sorted(masks, key=lambda x: x["area"], reverse=True)
         pad_imgs = []
         segs = []
-        scores = []
         for mask in sorted_masks:
             bbox = mask["bbox"]
             seg_mask = mask["segmentation"]
-            score = mask["stability_score"] * mask["predicted_iou"]
             x1, y1 = int(bbox[0]), int(bbox[1])
             x2, y2 = int(bbox[0] + bbox[2]), int(bbox[1] + bbox[3])
             # h_thresh = int(image.shape[0] * 0.1)
@@ -80,7 +79,6 @@ class SAMCLIP:
                 pad[(w - h) // 2 : (w - h) // 2 + h, :, :] = crop
             pad_imgs.append(cv2.resize(pad, (336, 336)))
             segs.append(seg_mask)
-            scores.append(score)
 
         if len(pad_imgs) == 0:
             print("Error: no mask detected!")
@@ -90,9 +88,19 @@ class SAMCLIP:
         pad_imgs = torch.from_numpy(pad_imgs.astype("float32")).permute(0, 3, 1, 2) / 255.0
         pad_imgs = torchvision.transforms.Normalize(
             (0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711)
-        )(pad_imgs).cuda()
+        )(pad_imgs)
 
-        crop_features = self.clip_model.encode_image(pad_imgs).cpu()
+        crop_features = []
+        for start in range(0, pad_imgs.shape[0], self.clip_batch_size):
+            pad_imgs_chunk = pad_imgs[start : start + self.clip_batch_size].cuda(non_blocking=True)
+            with torch.cuda.amp.autocast(enabled=self.low_vram and torch.cuda.is_available()):
+                chunk_features = self.clip_model.encode_image(pad_imgs_chunk)
+            crop_features.append(chunk_features.float().cpu())
+            del pad_imgs_chunk
+            del chunk_features
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        crop_features = torch.cat(crop_features, dim=0)
         features = torch.zeros((768, image.shape[0], image.shape[1]), dtype=torch.half)
         for idx, seg_mask in enumerate(segs):
             features[:, seg_mask] += crop_features[idx].unsqueeze(1)  # * scores[idx]

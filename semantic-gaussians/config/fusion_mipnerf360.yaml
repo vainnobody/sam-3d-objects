@@ -32,3 +32,7 @@ fusion:
   n_split_points: 9999999 #80000
   num_rand_file_per_scene: 1 #5
   out_dir: "./fusion"
+  clip_batch_size: 8
+  view_stride: 5
+  low_vram: true
+  samclip_points_per_side: 32
