@@ -60,21 +60,26 @@ def fuse_one_scene(config, model_2d):
         for idx, view in enumerate(tqdm(loader)):
             if idx % 5 != 0:
                 continue
+            features = None
+            features_mapping = None
+            depth = None
+            mapping = None
             view = view[0]
-            view.cuda()
-            mapper = PointCloudToImageMapper(
-                config.fusion.img_dim,
-                config.fusion.visibility_threshold,
-                config.fusion.cut_boundary,
-                views.camera_info[idx].intrinsics,
-            )
+            try:
+                view.cuda()
+                mapper = PointCloudToImageMapper(
+                    config.fusion.img_dim,
+                    config.fusion.visibility_threshold,
+                    config.fusion.cut_boundary,
+                    views.camera_info[idx].intrinsics,
+                )
 
-            # Call seg model to get per-pixel features
-            gt_path = view.image_path
-            features = model_2d.extract_image_feature(
-                gt_path,
-                [config.fusion.img_dim[1], config.fusion.img_dim[0]],
-            )
+                # Call seg model to get per-pixel features
+                gt_path = view.image_path
+                features = model_2d.extract_image_feature(
+                    gt_path,
+                    [config.fusion.img_dim[1], config.fusion.img_dim[0]],
+                )
 
             ################################# Save relevancy maps from pretrained models ####################################
             # pretrained_save_path = os.path.join(config.model.model_dir, "render", "pretrained")
@@ -103,45 +108,53 @@ def fuse_one_scene(config, model_2d):
             # )
             #################################################################################################################
 
-            if config.fusion.depth == "image":
-                depth_path = os.path.join(config.scene.scene_path, "depth", view.image_name + ".png")
-                depth = imageio.v2.imread(depth_path) / config.fusion.depth_scale
-            elif config.fusion.depth == "render":
-                depth = (
-                    render(
-                        view,
-                        gaussians,
-                        config.pipeline,
-                        background,
-                        override_shape=config.fusion.img_dim,
-                    )["depth"]
-                    .cpu()
-                    .numpy()[0]
+                if config.fusion.depth == "image":
+                    depth_path = os.path.join(config.scene.scene_path, "depth", view.image_name + ".png")
+                    depth = imageio.v2.imread(depth_path) / config.fusion.depth_scale
+                elif config.fusion.depth == "render":
+                    depth = (
+                        render(
+                            view,
+                            gaussians,
+                            config.pipeline,
+                            background,
+                            override_shape=config.fusion.img_dim,
+                        )["depth"]
+                        .cpu()
+                        .numpy()[0]
+                    )
+                elif config.fusion.depth == "surface":
+                    depth = "surface"
+                else:
+                    depth = None
+
+                # calculate the 3d-2d mapping based on the depth
+                mapping = np.ones([gaussians._xyz.shape[0], 4], dtype=int)
+                mapping[:, 1:4], weight = mapper.compute_mapping(
+                    view.world_view_transform.cpu().numpy(),
+                    gaussians._xyz.cpu().numpy(),
+                    depth,
                 )
-            elif config.fusion.depth == "surface":
-                depth = "surface"
-            else:
-                depth = None
+                if mapping[:, 3].sum() == 0:  # no points corresponds to this image, skip
+                    continue
 
-            # calculate the 3d-2d mapping based on the depth
-            mapping = np.ones([gaussians._xyz.shape[0], 4], dtype=int)
-            mapping[:, 1:4], weight = mapper.compute_mapping(
-                view.world_view_transform.cpu().numpy(),
-                gaussians._xyz.cpu().numpy(),
-                depth,
-            )
-            if mapping[:, 3].sum() == 0:  # no points corresponds to this image, skip
-                continue
+                mapping = torch.from_numpy(mapping)
+                mask = mapping[:, 3]
+                vis_id[:, idx] = mask
+                features_mapping = features[:, mapping[:, 1], mapping[:, 2]]
+                features_mapping = features_mapping.permute(1, 0).cuda()
 
-            mapping = torch.from_numpy(mapping)
-            mask = mapping[:, 3]
-            vis_id[:, idx] = mask
-            features_mapping = features[:, mapping[:, 1], mapping[:, 2]]
-            features_mapping = features_mapping.permute(1, 0).cuda()
-
-            mask_k = mask != 0
-            gaussians._times[mask_k] += 1
-            gaussians._features_semantic[mask_k] += features_mapping[mask_k]
+                mask_k = mask != 0
+                gaussians._times[mask_k] += 1
+                gaussians._features_semantic[mask_k] += features_mapping[mask_k]
+            finally:
+                del features
+                del features_mapping
+                del depth
+                del mapping
+                del view
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
 
         gaussians._times[gaussians._times == 0] = 1e-5
         gaussians._features_semantic /= gaussians._times
