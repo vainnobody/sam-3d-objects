@@ -24,3 +24,8 @@ model:
 render:
   fusion_dir: "/PATH/TO/YOUR/OWN/*.pt"
   model_2d: openseg # choose from openseg, lseg, samclip, vlpart
+  feature_dtype: fp16
+  keep_features_on_gpu: false
+  keep_edit_backup_on_gpu: false
+  lazy_text_model: true
+  semantic_resolution_divisor: 2

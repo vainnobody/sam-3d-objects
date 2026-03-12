@@ -285,7 +285,7 @@ class GaussianModel:
         optimizable_tensors = self.replace_tensor_to_optimizer(opacities_new, "opacity")
         self._opacity = optimizable_tensors["opacity"]
 
-    def load_ply(self, path):
+    def load_ply(self, path, requires_grad=True):
         plydata = PlyData.read(path)
 
         xyz = np.stack(
@@ -324,26 +324,26 @@ class GaussianModel:
         for idx, attr_name in enumerate(rot_names):
             rots[:, idx] = np.asarray(plydata.elements[0][attr_name])
 
-        self._xyz = nn.Parameter(torch.tensor(xyz, dtype=torch.float, device="cuda").requires_grad_(True))
+        self._xyz = nn.Parameter(torch.tensor(xyz, dtype=torch.float, device="cuda").requires_grad_(requires_grad))
         self._features_dc = nn.Parameter(
             torch.tensor(features_dc, dtype=torch.float, device="cuda")
             .transpose(1, 2)
             .contiguous()
-            .requires_grad_(True)
+            .requires_grad_(requires_grad)
         )
         self._features_rest = nn.Parameter(
             torch.tensor(features_extra, dtype=torch.float, device="cuda")
             .transpose(1, 2)
             .contiguous()
-            .requires_grad_(True)
+            .requires_grad_(requires_grad)
         )
-        self._opacity = nn.Parameter(torch.tensor(opacities, dtype=torch.float, device="cuda").requires_grad_(True))
-        self._scaling = nn.Parameter(torch.tensor(scales, dtype=torch.float, device="cuda").requires_grad_(True))
-        self._rotation = nn.Parameter(torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True))
+        self._opacity = nn.Parameter(torch.tensor(opacities, dtype=torch.float, device="cuda").requires_grad_(requires_grad))
+        self._scaling = nn.Parameter(torch.tensor(scales, dtype=torch.float, device="cuda").requires_grad_(requires_grad))
+        self._rotation = nn.Parameter(torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(requires_grad))
 
         self.active_sh_degree = self.max_sh_degree
 
-    def load_dynamic_npz(self, path, t):
+    def load_dynamic_npz(self, path, t, requires_grad=True):
         if self.dynamic_npz is None:
             params = dict(np.load(path))
             self.dynamic_npz = {k: np.array(v).astype(np.float32) for k, v in params.items()}
@@ -357,25 +357,25 @@ class GaussianModel:
                 torch.tensor(features_extra, dtype=torch.float, device="cuda")
                 .transpose(1, 2)
                 .contiguous()
-                .requires_grad_(True)
+                .requires_grad_(requires_grad)
             )
-            self._opacity = nn.Parameter(torch.tensor(opacities, dtype=torch.float, device="cuda").requires_grad_(True))
-            self._scaling = nn.Parameter(torch.tensor(scales, dtype=torch.float, device="cuda").requires_grad_(True))
+            self._opacity = nn.Parameter(torch.tensor(opacities, dtype=torch.float, device="cuda").requires_grad_(requires_grad))
+            self._scaling = nn.Parameter(torch.tensor(scales, dtype=torch.float, device="cuda").requires_grad_(requires_grad))
             self.active_sh_degree = self.max_sh_degree
 
         xyz = self.dynamic_npz["means3D"][t]
         features_dc = RGB2SH(self.dynamic_npz["rgb_colors"][t])[:, :, np.newaxis]
         rots = self.dynamic_npz["unnorm_rotations"][t]
 
-        self._xyz = nn.Parameter(torch.tensor(xyz, dtype=torch.float, device="cuda").requires_grad_(True))
+        self._xyz = nn.Parameter(torch.tensor(xyz, dtype=torch.float, device="cuda").requires_grad_(requires_grad))
         self._features_dc = nn.Parameter(
             torch.tensor(features_dc, dtype=torch.float, device="cuda")
             .transpose(1, 2)
             .contiguous()
-            .requires_grad_(True)
+            .requires_grad_(requires_grad)
         )
 
-        self._rotation = nn.Parameter(torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True))
+        self._rotation = nn.Parameter(torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(requires_grad))
 
     def get_ply(self, path):
         plydata = PlyData.read(path)

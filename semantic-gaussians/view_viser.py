@@ -28,8 +28,19 @@ def get_text(vocabulary, prefix_prompt=""):
     return texts
 
 
+def restore_tensor_(target, source):
+    if source.device == target.device:
+        target.copy_(source)
+    else:
+        target.copy_(source.to(device=target.device, dtype=target.dtype))
+
+
 def main(config):
     with torch.no_grad():
+        device = torch.device(config.model.device)
+        feature_dtype = torch.float16 if str(config.render.feature_dtype).lower() == "fp16" else torch.float32
+        semantic_downsample = max(1, int(config.render.semantic_resolution_divisor))
+
         # Load 3D Gaussians
         scene_config = deepcopy(config)
         if config.model.dynamic:
@@ -39,7 +50,7 @@ def main(config):
 
         if config.model.model_dir:
             if config.model.dynamic:
-                gaussians.load_dynamic_npz(os.path.join(config.model.model_dir, "params.npz"), 0)
+                gaussians.load_dynamic_npz(os.path.join(config.model.model_dir, "params.npz"), 0, requires_grad=False)
             else:
                 if config.model.load_iteration == -1:
                     loaded_iter = searchForMaxIteration(os.path.join(config.model.model_dir, "point_cloud"))
@@ -53,37 +64,71 @@ def main(config):
                         f"iteration_{loaded_iter}",
                         "point_cloud.ply",
                     )
+                    ,
+                    requires_grad=False,
                 )
         else:
             raise NotImplementedError
         
         # Load semantic embeddings
-        fusion = torch.load(config.render.fusion_dir)
-        features, mask = fusion["feat"].float().cuda(), fusion["mask_full"].cuda()
-        original_opacity = gaussians._opacity.detach().clone()
-        original_scale = gaussians._scaling.detach().clone()
-        original_color = gaussians._features_dc.detach().clone()
-        original_coord = gaussians._xyz.detach().clone()
+        fusion = torch.load(config.render.fusion_dir, map_location="cpu")
+        features_cpu = fusion["feat"].to(dtype=feature_dtype, device="cpu")
+        mask_cpu = fusion["mask_full"].to(dtype=torch.bool, device="cpu")
+        mask = mask_cpu.to(device=device)
 
-        # Create text encoding model
-        if config.render.model_2d == "lseg": # 512dim CLIP
-            text_model = LSeg(None)
-        else: # 768dim CLIP
-            text_model = OpenSeg(None, "ViT-L/14@336px")
+        if config.render.keep_features_on_gpu:
+            features_gpu = features_cpu.to(device=device, dtype=feature_dtype)
+        else:
+            features_gpu = None
 
-        features_save = torch.zeros((mask.shape[0], text_model.embedding_dim)).float().cuda()
-        features_save[mask] = features
+        if config.render.keep_edit_backup_on_gpu:
+            original_opacity = gaussians._opacity.detach().clone()
+            original_scale = gaussians._scaling.detach().clone()
+            original_color = gaussians._features_dc.detach().clone()
+            original_coord = gaussians._xyz.detach().clone()
+        else:
+            original_opacity = gaussians._opacity.detach().cpu().clone()
+            original_scale = gaussians._scaling.detach().cpu().clone()
+            original_color = gaussians._features_dc.detach().cpu().clone()
+            original_coord = gaussians._xyz.detach().cpu().clone()
+
+        text_model = None
+
+        def get_text_model():
+            nonlocal text_model
+            if text_model is None:
+                if config.render.model_2d == "lseg":  # 512dim CLIP
+                    text_model = LSeg(None)
+                else:  # 768dim CLIP
+                    text_model = OpenSeg(None, "ViT-L/14@336px")
+            return text_model
+
+        def get_feature_bank():
+            if features_gpu is not None:
+                return features_gpu
+            return features_cpu.to(device=device, dtype=feature_dtype)
+
+        def restore_gaussians():
+            restore_tensor_(gaussians._opacity, original_opacity)
+            restore_tensor_(gaussians._features_dc, original_color)
+            restore_tensor_(gaussians._scaling, original_scale)
+            restore_tensor_(gaussians._xyz, original_coord)
+
+        if not config.render.lazy_text_model:
+            get_text_model()
 
         # Initialize colormap and camera
         colormap = COLORMAP
         colormap_hex = [to_hex(e) for e in colormap]
-        colormap_cuda = torch.tensor(colormap).cuda()
+        colormap_cuda = torch.tensor(colormap, device=device)
 
         bg_color = [1, 1, 1] if config.scene.white_background else [0, 0, 0]
-        background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
+        background = torch.tensor(bg_color, dtype=torch.float32, device=device)
         scene_camera = scene.getTrainCameras()[0]
         width, height = scene_camera.image_width, scene_camera.image_height
         w2c = scene_camera.world_view_transform.cpu().numpy().transpose()
+        soft_save = None
+        color_save = None
         
         # Initialize viser
         server = viser.ViserServer()
@@ -126,34 +171,66 @@ def main(config):
         @gui_render_mode.on_click
         def _(_) -> None:
             nonlocal render_mode
+            nonlocal need_update
             render_mode = gui_render_mode.value
+            need_update = True
 
         @gui_edit_mode.on_click
         def _(_) -> None:
             nonlocal edit_mode
             nonlocal need_color_compute
+            nonlocal need_update
             edit_mode = gui_edit_mode.value
             need_color_compute = True
+            need_update = True
 
         @gui_prompt_button.on_click
         def _(_) -> None:
             nonlocal need_color_compute
+            nonlocal need_update
             need_color_compute = True
+            need_update = True
 
         @gui_editing_button.on_click
         def _(_) -> None:
             nonlocal need_color_compute
+            nonlocal need_update
             need_color_compute = True
+            need_update = True
 
         @gui_scale_slider.on_update
         def _(_) -> None:
             nonlocal need_color_compute
+            nonlocal need_update
             need_color_compute = True
+            need_update = True
 
         @resolution_scale_group.on_click
         def _(_) -> None:
             nonlocal need_color_compute
+            nonlocal need_update
             need_color_compute = True
+            need_update = True
+
+        @gui_background_checkbox.on_update
+        def _(_) -> None:
+            nonlocal need_update
+            need_update = True
+
+        @gui_up_checkbox.on_update
+        def _(_) -> None:
+            nonlocal need_update
+            need_update = True
+
+        @gui_near_slider.on_update
+        def _(_) -> None:
+            nonlocal need_update
+            need_update = True
+
+        @gui_far_slider.on_update
+        def _(_) -> None:
+            nonlocal need_update
+            need_update = True
 
         @server.on_client_connect
         def _(client: viser.ClientHandle) -> None:
@@ -174,27 +251,41 @@ def main(config):
             start_time = time.time()
             num_timesteps = config.model.num_timesteps
         while True:
+            if not server.get_clients():
+                time.sleep(0.05)
+                continue
+
             if config.model.dynamic:
                 passed_time = time.time() - start_time
                 passed_frames = passed_time * config.render.dynamic_fps
                 t = int(passed_frames % num_timesteps)
+                need_update = True
+
+            if not need_color_compute and not need_update:
+                time.sleep(0.01)
+                continue
+
             if need_color_compute:
                 # Compute text embeddings and relevancy
+                text_model_cur = get_text_model()
                 labelset = ["other"] + get_text(gui_prompt_input.value.split(","))
-                text_features = text_model.extract_text_feature(labelset).float()
-                sim = torch.einsum("cq,dq->dc", text_features, features)
-                label_soft = sim.softmax(dim=1)
-                label_hard = torch.nn.functional.one_hot(sim.argmax(dim=1), num_classes=label_soft.shape[1]).float()
-                soft_save = torch.zeros((mask.shape[0], label_soft.shape[1])).float().cuda()
+                feature_bank = get_feature_bank()
+                text_features = text_model_cur.extract_text_feature(labelset).to(dtype=feature_dtype)
+                sim = torch.einsum("cq,dq->dc", text_features, feature_bank)
+                label_hard = torch.nn.functional.one_hot(sim.argmax(dim=1), num_classes=text_features.shape[0]).to(
+                    dtype=feature_dtype
+                )
+                soft_save = torch.zeros((mask.shape[0], label_hard.shape[1]), dtype=feature_dtype, device=device)
                 soft_save[mask] = label_hard
-                # sim[sim < 0] = -2
                 label = sim.argmax(dim=1)
-                colors = colormap_cuda[label] / 255
-                color_save = torch.zeros((mask.shape[0], 3)).float().cuda()
+                palette_idx = label % len(colormap)
+                colors = colormap_cuda[palette_idx] / 255
+                color_save = torch.zeros((mask.shape[0], 3), dtype=feature_dtype, device=device)
                 color_save[mask] = colors
 
                 # Reset colormap tab
-                color_mapping = list(zip(labelset, colormap_hex))
+                repeated_hex = (colormap_hex * ((len(labelset) + len(colormap_hex) - 1) // len(colormap_hex)))[: len(labelset)]
+                color_mapping = list(zip(labelset, repeated_hex))
                 content_head = "| | |\n|:-:|:-|"
                 content_body = "".join(
                     [
@@ -211,16 +302,13 @@ def main(config):
                 # Scene editing control
                 if gui_edit_input.value != "":
                     len_edit = len(gui_edit_input.value.split(","))
-                    edit_features = text_model.extract_text_feature(
+                    edit_features = text_model_cur.extract_text_feature(
                         ["other"] + gui_edit_input.value.split(",") + gui_preserve_input.value.split(",")
-                    ).float()
-                    sim = torch.einsum("cq,dq->dc", edit_features, features)
+                    ).to(dtype=feature_dtype)
+                    sim = torch.einsum("cq,dq->dc", edit_features, feature_bank)
                     sim[sim < 0] = -2
                     label = sim.argmax(dim=1)
-                    gaussians._opacity[:] = original_opacity
-                    gaussians._features_dc[:] = original_color
-                    gaussians._scaling[:] = original_scale
-                    gaussians._xyz[:] = original_coord
+                    restore_gaussians()
 
                     edit_mask = (label > 0) * (label <= len_edit)
                     if edit_mode == "Remove":
@@ -246,12 +334,16 @@ def main(config):
                         tmp[edit_mask] += 1
                         gaussians._xyz[mask] = tmp
                 else:
-                    gaussians._opacity[:] = original_opacity
-                    gaussians._features_dc[:] = original_color
-                    gaussians._scaling[:] = original_scale
-                    gaussians._xyz[:] = original_coord
+                    restore_gaussians()
 
+                if features_gpu is None:
+                    del feature_bank
+                if gui_edit_input.value != "":
+                    del edit_features
+                del text_features, sim
                 need_color_compute = False
+                need_update = True
+                torch.cuda.empty_cache()
 
             # Render for each client
             for client in server.get_clients().values():
@@ -270,7 +362,7 @@ def main(config):
                 )
                 new_camera.cuda()
                 if config.model.dynamic:
-                    gaussians.load_dynamic_npz(os.path.join(config.model.model_dir, "params.npz"), t)
+                    gaussians.load_dynamic_npz(os.path.join(config.model.model_dir, "params.npz"), t, requires_grad=False)
                 if render_mode == "RGB":
                     output = render(
                         new_camera,
@@ -280,6 +372,7 @@ def main(config):
                         scaling_modifier=gui_scale_slider.value,
                         override_shape=(width, height),
                         foreground=gaussians.is_fg if gui_background_checkbox.value else None,
+                        track_grad=False,
                     )
                     rendering = output["render"].cpu().numpy().transpose(1, 2, 0)
                 elif render_mode == "Depth":
@@ -291,6 +384,7 @@ def main(config):
                         scaling_modifier=gui_scale_slider.value,
                         override_shape=(width, height),
                         foreground=gaussians.is_fg if gui_background_checkbox.value else None,
+                        track_grad=False,
                     )
                     rendering = output["depth"].cpu().numpy().transpose(1, 2, 0)
                     rendering = np.clip(
@@ -300,6 +394,10 @@ def main(config):
                     )
                     rendering = cv2.cvtColor(rendering.astype(np.uint8), cv2.COLOR_GRAY2RGB)
                 elif render_mode == "Semantic":
+                    render_palette_cuda = colormap_cuda
+                    if soft_save.shape[1] > colormap_cuda.shape[0]:
+                        repeat = (soft_save.shape[1] + colormap_cuda.shape[0] - 1) // colormap_cuda.shape[0]
+                        render_palette_cuda = colormap_cuda.repeat(repeat, 1)[: soft_save.shape[1]]
                     output = render_chn(
                         new_camera,
                         gaussians,
@@ -308,12 +406,13 @@ def main(config):
                         scaling_modifier=gui_scale_slider.value,
                         num_channels=soft_save.shape[1],
                         override_color=soft_save,
-                        override_shape=(width//2, height//2),
+                        override_shape=(width // semantic_downsample, height // semantic_downsample),
                         foreground=gaussians.is_fg if gui_background_checkbox.value else None,
+                        track_grad=False,
                     )
                     sim = output["render"]
                     label = sim.argmax(dim=0).cpu()
-                    sem = render_palette(label, colormap_cuda.reshape(-1))
+                    sem = render_palette(label, render_palette_cuda.reshape(-1))
                     rendering = sem.cpu().numpy().transpose(1, 2, 0)
                 else:  # relevancy
                     output = render(
@@ -323,17 +422,30 @@ def main(config):
                         background,
                         scaling_modifier=gui_scale_slider.value,
                         override_color=color_save,
-                        override_shape=(width//2, height//2),
+                        override_shape=(width // semantic_downsample, height // semantic_downsample),
                         foreground=gaussians.is_fg if gui_background_checkbox.value else None,
+                        track_grad=False,
                     )
                     rendering = output["render"].cpu().numpy().transpose(1, 2, 0)
                 client.set_background_image(rendering)
+            need_update = False
 
 
 if __name__ == "__main__":
     config = OmegaConf.load("./config/view_scannet.yaml")
+    default_render_config = OmegaConf.create(
+        {
+            "render": {
+                "feature_dtype": "fp16",
+                "keep_features_on_gpu": False,
+                "keep_edit_backup_on_gpu": False,
+                "lazy_text_model": True,
+                "semantic_resolution_divisor": 2,
+            }
+        }
+    )
     override_config = OmegaConf.from_cli()
-    config = OmegaConf.merge(config, override_config)
+    config = OmegaConf.merge(default_render_config, config, override_config)
     print(OmegaConf.to_yaml(config))
 
     set_seed(config.pipeline.seed)

@@ -27,6 +27,7 @@ def render(
     override_shape=None,
     foreground=None,
     world_rotate=None,
+    track_grad=True,
 ):
     """
     Render the scene.
@@ -34,11 +35,17 @@ def render(
     Background tensor (bg_color) must be on GPU!
     """
     # Create zero tensor. We will use it to make pytorch return gradients of the 2D (screen-space) means
-    screenspace_points = torch.zeros_like(pc.get_xyz, dtype=pc.get_xyz.dtype, requires_grad=True, device="cuda") + 0
-    try:
-        screenspace_points.retain_grad()
-    except:
-        pass
+    screenspace_points = torch.zeros_like(
+        pc.get_xyz,
+        dtype=pc.get_xyz.dtype,
+        requires_grad=track_grad,
+        device="cuda",
+    ) + 0
+    if track_grad:
+        try:
+            screenspace_points.retain_grad()
+        except:
+            pass
 
     # Set up rasterization configuration
     tanfovx = math.tan(viewpoint_camera.FoVx * 0.5)
@@ -142,6 +149,7 @@ def render_chn(
     override_shape=None,
     foreground=None,
     world_rotate=None,
+    track_grad=True,
 ):
     """
     Render the scene.
@@ -149,11 +157,17 @@ def render_chn(
     Background tensor (bg_color) must be on GPU!
     """
     # Create zero tensor. We will use it to make pytorch return gradients of the 2D (screen-space) means
-    screenspace_points = torch.zeros_like(pc.get_xyz, dtype=pc.get_xyz.dtype, requires_grad=True, device="cuda") + 0
-    try:
-        screenspace_points.retain_grad()
-    except:
-        pass
+    screenspace_points = torch.zeros_like(
+        pc.get_xyz,
+        dtype=pc.get_xyz.dtype,
+        requires_grad=track_grad,
+        device="cuda",
+    ) + 0
+    if track_grad:
+        try:
+            screenspace_points.retain_grad()
+        except:
+            pass
 
     # Set up rasterization configuration
     tanfovx = math.tan(viewpoint_camera.FoVx * 0.5)
