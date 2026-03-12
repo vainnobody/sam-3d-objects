@@ -15,6 +15,7 @@ import logging
 import shutil
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.request
 import zipfile
@@ -95,10 +96,57 @@ def configure_logging(verbose: bool) -> None:
     )
 
 
+def _format_size(num_bytes: int) -> str:
+    units = ("B", "KB", "MB", "GB", "TB")
+    size = float(num_bytes)
+    for unit in units:
+        if size < 1024.0 or unit == units[-1]:
+            return f"{size:.1f}{unit}"
+        size /= 1024.0
+    return f"{num_bytes}B"
+
+
+def _copy_with_progress(response, output_path: Path, expected_bytes: int | None = None) -> int:
+    chunk_size = 1024 * 1024
+    downloaded = 0
+    started_at = time.time()
+    last_reported = started_at - 1.0
+
+    with open(output_path, "wb") as handle:
+        while True:
+            chunk = response.read(chunk_size)
+            if not chunk:
+                break
+            handle.write(chunk)
+            downloaded += len(chunk)
+
+            now = time.time()
+            if now - last_reported < 0.2 and expected_bytes is not None and downloaded < expected_bytes:
+                continue
+            last_reported = now
+            elapsed = max(now - started_at, 1e-6)
+            speed = downloaded / elapsed
+            if expected_bytes:
+                percent = min(downloaded / expected_bytes, 1.0) * 100.0
+                status = (
+                    f"\rDownloading: {percent:5.1f}% "
+                    f"({_format_size(downloaded)}/{_format_size(expected_bytes)}) "
+                    f"at {_format_size(int(speed))}/s"
+                )
+            else:
+                status = f"\rDownloading: {_format_size(downloaded)} at {_format_size(int(speed))}/s"
+            print(status, end="", flush=True)
+
+    print()
+    return downloaded
+
+
 def download_file(url: str, output_path: Path) -> None:
     logging.info("Downloading %s", url)
-    with urllib.request.urlopen(url) as response, open(output_path, "wb") as handle:
-        shutil.copyfileobj(response, handle)
+    with urllib.request.urlopen(url) as response:
+        content_length = response.headers.get("Content-Length")
+        expected_bytes = int(content_length) if content_length is not None else None
+        _copy_with_progress(response, output_path, expected_bytes=expected_bytes)
 
 
 def download_partial_file(url: str, output_path: Path, megabytes: int) -> int:
@@ -110,14 +158,14 @@ def download_partial_file(url: str, output_path: Path, megabytes: int) -> int:
     request = urllib.request.Request(url, headers={"Range": f"bytes=0-{end_byte}"})
     logging.info("Testing partial download: first %d MB from %s", megabytes, url)
     try:
-        with urllib.request.urlopen(request) as response, open(output_path, "wb") as handle:
-            shutil.copyfileobj(response, handle)
+        with urllib.request.urlopen(request) as response:
+            bytes_downloaded = _copy_with_progress(response, output_path, expected_bytes=num_bytes)
     except urllib.error.HTTPError as exc:
         raise RuntimeError(
             "Server did not accept the test Range request. "
             "Try downloading the full scene without --test-download-mb."
         ) from exc
-    return output_path.stat().st_size
+    return bytes_downloaded
 
 
 def extract_scene(zip_path: Path, scene: str, downscale_factor: int, target_dir: Path) -> None:
