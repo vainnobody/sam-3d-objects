@@ -43,6 +43,7 @@ mosaicml-streaming==0.7.5
 nvidia-cuda-nvcc-cu12==12.1.105
 nvidia-pyindex==1.0.9
 objsize==0.7.0
+objaverse==0.1.7
 open3d==0.18.0
 opencv-python==4.9.0.80
 OpenEXR==3.3.3

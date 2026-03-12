@@ -1,2 +1,43 @@
-__pycache__
-*.pdf
+# OS / editors
+.DS_Store
+.vscode/
+.idea/
+
+# Python cache / build
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Local environments
+.venv/
+venv/
+env/
+
+# Local-only instructions
+AGENTS.md
+**/AGENTS.md
+
+# Data, checkpoints, and experiment outputs
+data/**
+!data/.gitignore
+checkpoints/**
+!checkpoints/.gitignore
+notebook/meshes/**
+!notebook/meshes/.gitignore
+geoalign_cache/
+output/
+output_geoalign/
+results_distlll/
+segmentation_res/
+
+# Logs / temp artifacts
+*.log
+*.tmp
+*.swp
+
+# Large local reference files
+paper.pdf

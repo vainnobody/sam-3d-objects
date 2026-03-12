@@ -1,0 +1,55 @@
+scene:
+  scene_path: "/PATH/TO/YOUR/SCENE"
+  dataset_name: "colmap"
+  test_cameras: false
+  colmap_images: "images"
+  colmap_eval_hold: 8
+  downscale_ratio: 1
+  white_background: false
+  device: "cuda:0"
+
+pipeline:
+  convert_shs_python: false
+  compute_cov3d_python: false
+  debug: false
+  seed: 0
+
+model:
+  sh_degree: 3
+  model_dir: "/PATH/TO/YOUR/3DGS_MODEL"
+  load_iteration: -1
+
+geoalign:
+  device: "cuda"
+  cache_dir: "./geoalign_cache"
+  output_dir: "./output_geoalign"
+  train_split: "train"
+  cache:
+    split: "train"
+    mask_root: "/PATH/TO/YOUR/MASKS"
+    prior_root: null
+    label_root: null
+    visibility_threshold: 0.05
+    cut_boundary: 10
+  model:
+    image_dim: 128
+    gaussian_dim: 128
+    geometry_dim: 32
+    sonata_dim: 0
+  loss:
+    mask_w: 1.0
+    geo_w: 0.2
+    reproj_w: 0.5
+    sparse_w: 0.05
+  train:
+    batch_size: 1
+    num_workers: 0
+    epochs: 10
+    lr: 1.0e-4
+    weight_decay: 1.0e-4
+    save_every: 200
+
+  checkpoint: "./output_geoalign/checkpoints/last.pt"
+  sample_index: 0
+  infer:
+    threshold: 0.5
