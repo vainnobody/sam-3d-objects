@@ -16,6 +16,7 @@ On top of them, this repo adds a lightweight GeoAlign training path that learns 
 ## What is included
 
 - `scripts/download_objaverse_xl.py`: filtered Objaverse-XL downloader
+- `scripts/download_semantic_gaussians_sample.py`: tiny Semantic Gaussians-compatible sample downloader
 - `docs/`: survey notes, design notes, and the GeoAlign method spec
 - `semantic-gaussians/prepare_geoalign_cache.py`: prepare single-view GeoAlign training samples from 3DGS scenes
 - `semantic-gaussians/train_geoalign_mask.py`: train the lightweight Gaussian mask predictor
@@ -91,6 +92,29 @@ This runs the reference single-image reconstruction flow and writes `splat.ply`.
 ```bash
 python scripts/download_objaverse_xl.py --annotations-only
 ```
+
+### Tiny Semantic Gaussians test scene
+
+To smoke-test the Semantic Gaussians side of this repo with a small complete scene:
+
+```bash
+python scripts/download_semantic_gaussians_sample.py
+```
+
+如果你想先只验证下载链路是否工作，而不真的拉完整包：
+
+```bash
+python scripts/download_semantic_gaussians_sample.py --test-download-mb 8
+```
+
+By default this downloads the `Mip-NeRF 360 / stump` scene into:
+
+```text
+data/semantic_gaussians_samples/mipnerf360/stump
+```
+
+This scene is small enough for iterative testing and is compatible with the
+COLMAP-style loaders used by `semantic-gaussians/`.
 
 ### GeoAlign workflow
 

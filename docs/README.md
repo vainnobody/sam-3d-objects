@@ -2,6 +2,12 @@
 
 本目录收集了基于 `Semantic Gaussians + SAM3D geometry-aware projection` 的调研结果与实现草案。
 
+如果你想逐步测试仓库功能，当前推荐先下载一个小型完整样例：
+
+- `Mip-NeRF 360 / stump`
+- 下载脚本：`scripts/download_semantic_gaussians_sample.py`
+- 仅测试下载链路：`python scripts/download_semantic_gaussians_sample.py --test-download-mb 8`
+
 ## 文件说明
 
 - `semantic_gaussian_projection_survey.md`
