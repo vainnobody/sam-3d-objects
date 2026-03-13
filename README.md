@@ -93,6 +93,26 @@ This runs the reference single-image reconstruction flow and writes `splat.ply`.
 python scripts/download_objaverse_xl.py --annotations-only
 ```
 
+### LERF-OVS benchmark downloader
+
+Download one or more LERF-OVS scenes:
+
+```bash
+python scripts/download_lerf_ovs.py --scene figurines
+python scripts/download_lerf_ovs.py --scene figurines ramen
+python scripts/download_lerf_ovs.py --scene all
+python scripts/download_lerf_ovs.py --list-scenes
+```
+
+By default this extracts scenes into:
+
+```text
+data/lerf_ovs/<scene>
+```
+
+The upstream release is distributed as a single archive, and the script only
+extracts the requested scene directories.
+
 ### Tiny Semantic Gaussians test scene
 
 To smoke-test the Semantic Gaussians side of this repo with a small complete scene:
