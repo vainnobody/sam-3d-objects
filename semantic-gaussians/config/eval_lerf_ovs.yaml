@@ -1,0 +1,33 @@
+scene:
+  scene_path: "../data/lerf_ovs"
+  dataset_name: "lerf_ovs"
+  test_cameras: False
+  colmap_images: "images"
+  colmap_eval_hold: 8
+  downscale_ratio: 1
+  white_background: False
+  device: "cuda:0"
+
+pipeline:
+  convert_shs_python: False
+  compute_cov3d_python: False
+  debug: False
+  seed: 0
+
+model:
+  sh_degree: 3
+  model_dir: "./output/lerf_ovs"
+  load_iteration: -1
+  device: "cuda:0"
+
+fusion:
+  out_dir: "./fusion_lerf_ovs"
+
+eval:
+  source: "fusion"
+  label_root: "../data/lerf_ovs/label"
+  output_dir: "./eval_result_lerf_ovs"
+  scene_names: []
+  model_2d: "openseg"
+  mask_thresh: 0.4
+  smoothing_kernel: 30
