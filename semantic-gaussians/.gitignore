@@ -5,6 +5,7 @@ semantic/
 eval_samples/
 fusion/
 *.sh
+!tools/*.sh
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
