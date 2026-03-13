@@ -459,6 +459,74 @@ python eval_lerf_ovs.py \
 
 ---
 
+## 9.3 一键跑四个 scene 的脚本
+
+本仓库新增了一键脚本：
+
+```text
+semantic-gaussians/tools/run_lerf_ovs_eval_all.sh
+```
+
+它会按顺序对 4 个场景执行：
+
+1. `train.py`
+2. `fusion.py`
+3. `eval_lerf_ovs.py`
+
+默认 scene 顺序为：
+
+- `figurines`
+- `ramen`
+- `teatime`
+- `waldo_kitchen`
+
+### 默认用法
+
+```bash
+bash semantic-gaussians/tools/run_lerf_ovs_eval_all.sh
+```
+
+### 常用变体
+
+只跑评测，不重跑 train / fusion：
+
+```bash
+RUN_TRAIN=0 RUN_FUSION=0 bash semantic-gaussians/tools/run_lerf_ovs_eval_all.sh
+```
+
+把 3DGS 训练先缩短成 smoke test：
+
+```bash
+TRAIN_ITERS=7000 bash semantic-gaussians/tools/run_lerf_ovs_eval_all.sh
+```
+
+改成 `lseg`：
+
+```bash
+MODEL_2D=lseg bash semantic-gaussians/tools/run_lerf_ovs_eval_all.sh
+```
+
+### 可覆盖环境变量
+
+- `DATA_ROOT`
+- `LABEL_ROOT`
+- `OUTPUT_ROOT`
+- `FUSION_ROOT`
+- `EVAL_ROOT`
+- `MODEL_2D`
+- `TRAIN_ITERS`
+- `MASK_THRESH`
+- `RUN_TRAIN`
+- `RUN_FUSION`
+- `RUN_EVAL`
+- `EXTRA_TRAIN_ARGS`
+- `EXTRA_FUSION_ARGS`
+- `EXTRA_EVAL_ARGS`
+
+脚本会自动读取每个 scene 的首张图像分辨率，并把它传给 `fusion.img_dim`。
+
+---
+
 ## 10. 常见报错与排查
 
 ### 10.1 缺少 `data/lerf_ovs/label`
