@@ -32,7 +32,7 @@ from typing import Iterable
 DEFAULT_TIMEOUT_SECONDS = 120
 
 DEFAULT_OUTPUT_ROOT = Path("data/lerf_ovs")
-GOOGLE_DRIVE_FILE_ID = "14qscEhHdToKrcKYDssjsQoc1RkWG7M2j"
+GOOGLE_DRIVE_FILE_ID = "1QF1Po5p5DwTjFHu6tnTeYs_G0egMVmHt"
 ARCHIVE_URL = f"https://drive.google.com/uc?export=download&id={GOOGLE_DRIVE_FILE_ID}"
 ARCHIVE_NAME = "lerf_ovs.zip"
 SCENE_NAMES = (
@@ -167,7 +167,12 @@ def _format_size(num_bytes: int) -> str:
     return f"{num_bytes}B"
 
 
-def _copy_with_progress(response, output_path: Path, expected_bytes: int | None = None) -> int:
+def _copy_with_progress(
+    response,
+    output_path: Path,
+    expected_bytes: int | None = None,
+    max_bytes: int | None = None,
+) -> int:
     chunk_size = 1024 * 1024
     downloaded = 0
     started_at = time.time()
@@ -175,7 +180,13 @@ def _copy_with_progress(response, output_path: Path, expected_bytes: int | None 
 
     with open(output_path, "wb") as handle:
         while True:
-            chunk = response.read(chunk_size)
+            if max_bytes is not None:
+                remaining = max_bytes - downloaded
+                if remaining <= 0:
+                    break
+                chunk = response.read(min(chunk_size, remaining))
+            else:
+                chunk = response.read(chunk_size)
             if not chunk:
                 break
             handle.write(chunk)
@@ -288,17 +299,14 @@ def download_partial_file(url: str, output_path: Path, megabytes: int, cacert: P
         raise ValueError("megabytes must be positive")
 
     num_bytes = megabytes * 1024 * 1024
-    end_byte = num_bytes - 1
-    request = urllib.request.Request(url, headers={"Range": f"bytes=0-{end_byte}"})
     logging.info("Testing partial download: first %d MB from %s", megabytes, url)
-    try:
-        with _open_google_drive_download(request, ssl_context=build_ssl_context(cacert=cacert, insecure=insecure)) as response:
-            bytes_downloaded = _copy_with_progress(response, output_path, expected_bytes=num_bytes)
-    except urllib.error.HTTPError as exc:
-        raise RuntimeError(
-            "Server did not accept the test Range request. Try downloading the full archive "
-            "without --test-download-mb."
-        ) from exc
+    with _open_google_drive_download(url, ssl_context=build_ssl_context(cacert=cacert, insecure=insecure)) as response:
+        bytes_downloaded = _copy_with_progress(
+            response,
+            output_path,
+            expected_bytes=num_bytes,
+            max_bytes=num_bytes,
+        )
     return bytes_downloaded
 
 
