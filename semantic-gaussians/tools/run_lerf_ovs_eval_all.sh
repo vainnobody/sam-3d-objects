@@ -68,6 +68,9 @@ Environment overrides:
 Examples:
   RUN_TRAIN=0 RUN_FUSION=0 bash semantic-gaussians/tools/run_lerf_ovs_eval_all.sh
   MODEL_2D=lseg TRAIN_ITERS=7000 bash semantic-gaussians/tools/run_lerf_ovs_eval_all.sh
+
+If MODEL_2D=openseg fails with TensorFlow/cuDNN errors, run:
+  bash semantic-gaussians/tools/diagnose_openseg_env.sh
 EOF
 }
 
