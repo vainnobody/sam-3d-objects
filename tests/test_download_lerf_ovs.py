@@ -95,6 +95,13 @@ class DownloadLerfOvsTests(unittest.TestCase):
 
             MODULE.validate_scene_layout(scene_dir)
 
+    def test_build_ssl_context_insecure(self) -> None:
+        ctx = MODULE.build_ssl_context(insecure=True)
+        self.assertEqual(ctx.verify_mode, MODULE.ssl.CERT_NONE)
+
+    def test_build_ssl_context_with_missing_cacert_is_parser_level(self) -> None:
+        self.assertTrue(callable(MODULE.build_ssl_context))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -18,6 +18,7 @@ import http.cookiejar
 import logging
 import re
 import shutil
+import ssl
 import sys
 import tempfile
 import time
@@ -27,6 +28,8 @@ import urllib.request
 import zipfile
 from pathlib import Path
 from typing import Iterable
+
+DEFAULT_TIMEOUT_SECONDS = 120
 
 DEFAULT_OUTPUT_ROOT = Path("data/lerf_ovs")
 GOOGLE_DRIVE_FILE_ID = "14qscEhHdToKrcKYDssjsQoc1RkWG7M2j"
@@ -96,6 +99,16 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--cacert",
+        type=Path,
+        help="Optional custom CA bundle path used to verify HTTPS certificates.",
+    )
+    parser.add_argument(
+        "--insecure",
+        action="store_true",
+        help="Disable HTTPS certificate verification. Use only in trusted proxy/internal environments.",
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable verbose logging.",
@@ -104,6 +117,8 @@ def parse_args() -> argparse.Namespace:
 
     if args.test_download_mb < 0:
         parser.error("--test-download-mb must be non-negative.")
+    if args.cacert is not None and not args.cacert.is_file():
+        parser.error(f"--cacert file does not exist: {args.cacert}")
     return args
 
 
@@ -187,9 +202,20 @@ def _copy_with_progress(response, output_path: Path, expected_bytes: int | None 
     return downloaded
 
 
-def _build_google_drive_opener() -> urllib.request.OpenerDirector:
+def build_ssl_context(cacert: Path | None = None, insecure: bool = False) -> ssl.SSLContext:
+    if insecure:
+        return ssl._create_unverified_context()
+    if cacert is not None:
+        return ssl.create_default_context(cafile=str(cacert))
+    return ssl.create_default_context()
+
+
+def _build_google_drive_opener(ssl_context: ssl.SSLContext | None = None) -> urllib.request.OpenerDirector:
     cookie_jar = http.cookiejar.CookieJar()
-    return urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
+    handlers = [urllib.request.HTTPCookieProcessor(cookie_jar)]
+    if ssl_context is not None:
+        handlers.append(urllib.request.HTTPSHandler(context=ssl_context))
+    return urllib.request.build_opener(*handlers)
 
 
 def _extract_confirm_token(response_url: str, body: bytes) -> str | None:
@@ -210,9 +236,20 @@ def _extract_confirm_token(response_url: str, body: bytes) -> str | None:
     return None
 
 
-def _open_google_drive_download(request_or_url):
-    opener = _build_google_drive_opener()
-    response = opener.open(request_or_url)
+def _open_google_drive_download(request_or_url, ssl_context: ssl.SSLContext | None = None):
+    opener = _build_google_drive_opener(ssl_context=ssl_context)
+    try:
+        response = opener.open(request_or_url, timeout=DEFAULT_TIMEOUT_SECONDS)
+    except urllib.error.URLError as exc:
+        reason = getattr(exc, "reason", None)
+        if isinstance(reason, ssl.SSLCertVerificationError):
+            raise RuntimeError(
+                "HTTPS certificate verification failed while downloading LERF-OVS. "
+                "If your network uses a proxy with a custom root certificate, rerun with "
+                "--cacert /path/to/ca.pem. As a last resort, use --insecure to disable "
+                "certificate verification."
+            ) from exc
+        raise
     content_type = response.headers.get("Content-Type", "")
     if "text/html" not in content_type:
         return response
@@ -234,19 +271,19 @@ def _open_google_drive_download(request_or_url):
 
     if isinstance(request_or_url, urllib.request.Request):
         confirmed_request = urllib.request.Request(confirmed_url, headers=dict(request_or_url.header_items()))
-        return opener.open(confirmed_request)
-    return opener.open(confirmed_url)
+        return opener.open(confirmed_request, timeout=DEFAULT_TIMEOUT_SECONDS)
+    return opener.open(confirmed_url, timeout=DEFAULT_TIMEOUT_SECONDS)
 
 
-def download_file(url: str, output_path: Path) -> None:
+def download_file(url: str, output_path: Path, cacert: Path | None = None, insecure: bool = False) -> None:
     logging.info("Downloading %s", url)
-    with _open_google_drive_download(url) as response:
+    with _open_google_drive_download(url, ssl_context=build_ssl_context(cacert=cacert, insecure=insecure)) as response:
         content_length = response.headers.get("Content-Length")
         expected_bytes = int(content_length) if content_length is not None else None
         _copy_with_progress(response, output_path, expected_bytes=expected_bytes)
 
 
-def download_partial_file(url: str, output_path: Path, megabytes: int) -> int:
+def download_partial_file(url: str, output_path: Path, megabytes: int, cacert: Path | None = None, insecure: bool = False) -> int:
     if megabytes <= 0:
         raise ValueError("megabytes must be positive")
 
@@ -255,7 +292,7 @@ def download_partial_file(url: str, output_path: Path, megabytes: int) -> int:
     request = urllib.request.Request(url, headers={"Range": f"bytes=0-{end_byte}"})
     logging.info("Testing partial download: first %d MB from %s", megabytes, url)
     try:
-        with _open_google_drive_download(request) as response:
+        with _open_google_drive_download(request, ssl_context=build_ssl_context(cacert=cacert, insecure=insecure)) as response:
             bytes_downloaded = _copy_with_progress(response, output_path, expected_bytes=num_bytes)
     except urllib.error.HTTPError as exc:
         raise RuntimeError(
@@ -368,7 +405,7 @@ def main() -> int:
 
     if args.test_download_mb > 0:
         partial_path = args.output_root / f"{ARCHIVE_NAME}.partial"
-        bytes_downloaded = download_partial_file(ARCHIVE_URL, partial_path, args.test_download_mb)
+        bytes_downloaded = download_partial_file(ARCHIVE_URL, partial_path, args.test_download_mb, cacert=args.cacert, insecure=args.insecure)
         print(
             "\nPartial download test succeeded:\n"
             f"  file: {partial_path}\n"
@@ -407,7 +444,7 @@ def main() -> int:
                 archive_path = Path(temp_dir.name) / ARCHIVE_NAME
 
             if args.force or not archive_path.exists():
-                download_file(ARCHIVE_URL, archive_path)
+                download_file(ARCHIVE_URL, archive_path, cacert=args.cacert, insecure=args.insecure)
             else:
                 logging.info("Reusing existing archive at %s", archive_path)
 
