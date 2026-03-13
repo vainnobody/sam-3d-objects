@@ -85,6 +85,22 @@ require_path() {
   fi
 }
 
+require_lerf_label_dir() {
+  local scene="$1"
+  local path="$2"
+  if [[ ! -d "$path" ]]; then
+    echo "[ERROR] Missing label directory for $scene: $path" >&2
+    echo "[ERROR] LERF-OVS benchmark eval requires data/lerf_ovs/label/<scene>/frame_*.json." >&2
+    echo "[ERROR] Try rerunning: python scripts/download_lerf_ovs.py --scene $scene" >&2
+    exit 1
+  fi
+  if ! compgen -G "$path/frame_*.json" > /dev/null; then
+    echo "[ERROR] No frame_*.json annotations found for $scene under: $path" >&2
+    echo "[ERROR] Try rerunning: python scripts/download_lerf_ovs.py --scene $scene --force" >&2
+    exit 1
+  fi
+}
+
 require_path "$SG_DIR/train.py" "semantic-gaussians train.py"
 require_path "$SG_DIR/fusion.py" "semantic-gaussians fusion.py"
 require_path "$SG_DIR/eval_lerf_ovs.py" "semantic-gaussians eval_lerf_ovs.py"
@@ -192,7 +208,7 @@ for scene in "${SCENES[@]}"; do
   fi
 
   if [[ "$RUN_EVAL" == "1" ]]; then
-    require_path "$SCENE_LABEL" "label directory for $scene"
+    require_lerf_label_dir "$scene" "$SCENE_LABEL"
     require_path "$SCENE_FUSION_FEATURE" "fusion output for $scene"
     echo "[INFO] Running eval_lerf_ovs.py for $scene"
     python eval_lerf_ovs.py \

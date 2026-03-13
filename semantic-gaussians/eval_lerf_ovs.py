@@ -122,8 +122,9 @@ def load_scene_bundle(config, scene_name: str, text_model):
     fusion = torch.load(feature_path, map_location="cpu")
     feat = fusion["feat"].float().cuda()
     mask_full = fusion["mask_full"].bool().cuda()
-    gaussians._features_semantic.zero_()
-    gaussians._features_semantic[mask_full] = feat
+    with torch.no_grad():
+        gaussians._features_semantic.zero_()
+        gaussians._features_semantic[mask_full] = feat
 
     bg_color = [1] * text_model.embedding_dim if scene_config.scene.white_background else [0] * text_model.embedding_dim
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")

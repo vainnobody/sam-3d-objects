@@ -104,14 +104,28 @@ python scripts/download_lerf_ovs.py --scene all
 python scripts/download_lerf_ovs.py --list-scenes
 ```
 
-By default this extracts scenes into:
+By default this extracts scene data into:
 
 ```text
 data/lerf_ovs/<scene>
 ```
 
-The upstream release is distributed as a single archive, and the script only
-extracts the requested scene directories.
+Benchmark evaluation also expects ground-truth labels at:
+
+```text
+data/lerf_ovs/label/<scene>/frame_*.json
+```
+
+The downloader now tries to extract both the requested scene directories and
+their matching `label/<scene>` annotations from the upstream archive. If you
+only want the scene data for training/fusion, you can skip labels with:
+
+```bash
+python scripts/download_lerf_ovs.py --scene figurines --no-labels
+```
+
+Use labels when you plan to run `semantic-gaussians/eval_lerf_ovs.py` or
+`semantic-gaussians/tools/run_lerf_ovs_eval_all.sh` with evaluation enabled.
 
 ### Tiny Semantic Gaussians test scene
 

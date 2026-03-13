@@ -82,7 +82,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--force",
         action="store_true",
-        help="Re-extract requested scenes even if their target directories already exist.",
+        help="Re-extract requested scenes and matching labels even if their target directories already exist.",
+    )
+    parser.add_argument(
+        "--no-labels",
+        action="store_true",
+        help="Only extract scene data. Skip benchmark GT labels under output-root/label/.",
     )
     parser.add_argument(
         "--list-scenes",
@@ -317,10 +322,24 @@ def find_scene_root(parts: tuple[str, ...], scenes: set[str]) -> tuple[str, int]
     return None
 
 
-def extract_scenes(zip_path: Path, scenes: Iterable[str], output_root: Path, force: bool = False) -> dict[str, int]:
+def find_label_root(parts: tuple[str, ...], scenes: set[str]) -> tuple[str, int] | None:
+    for index, part in enumerate(parts[:-1]):
+        if part == "label" and parts[index + 1] in scenes:
+            return parts[index + 1], index
+    return None
+
+
+def extract_scenes(
+    zip_path: Path,
+    scenes: Iterable[str],
+    output_root: Path,
+    force: bool = False,
+    include_labels: bool = True,
+) -> tuple[dict[str, int], dict[str, int]]:
     requested = list(scenes)
     requested_set = set(requested)
     extracted_counts = {scene: 0 for scene in requested}
+    label_counts = {scene: 0 for scene in requested}
 
     if force:
         for scene in requested:
@@ -328,12 +347,33 @@ def extract_scenes(zip_path: Path, scenes: Iterable[str], output_root: Path, for
             if scene_dir.exists():
                 logging.info("Removing existing scene directory %s", scene_dir)
                 shutil.rmtree(scene_dir)
+            if include_labels:
+                label_dir = output_root / "label" / scene
+                if label_dir.exists():
+                    logging.info("Removing existing label directory %s", label_dir)
+                    shutil.rmtree(label_dir)
 
     with zipfile.ZipFile(zip_path) as archive:
         for info in archive.infolist():
             raw_name = info.filename.replace("\\", "/")
             parts = tuple(part for part in Path(raw_name).parts if part not in ("", "."))
             if not parts:
+                continue
+
+            label_root = find_label_root(parts, requested_set) if include_labels else None
+            if label_root is not None:
+                scene_name, label_index = label_root
+                relative_parts = parts[label_index + 2 :]
+                destination = output_root / "label" / scene_name
+                if relative_parts:
+                    destination = destination.joinpath(*relative_parts)
+                if info.is_dir() or not relative_parts:
+                    destination.mkdir(parents=True, exist_ok=True)
+                else:
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    with archive.open(info) as source, open(destination, "wb") as sink:
+                        shutil.copyfileobj(source, sink)
+                label_counts[scene_name] += 1
                 continue
 
             scene_root = find_scene_root(parts, requested_set)
@@ -360,7 +400,7 @@ def extract_scenes(zip_path: Path, scenes: Iterable[str], output_root: Path, for
             + ", ".join(missing)
             + ". The archive layout may have changed."
         )
-    return extracted_counts
+    return extracted_counts, label_counts
 
 
 def validate_scene_layout(scene_dir: Path) -> None:
@@ -382,6 +422,23 @@ def validate_scene_layout(scene_dir: Path) -> None:
         logging.warning("Did not detect transforms/poses/COLMAP metadata under %s", scene_dir)
 
 
+def validate_label_layout(scene_label_dir: Path) -> None:
+    if not scene_label_dir.is_dir():
+        raise RuntimeError(f"Missing label directory: {scene_label_dir}")
+    frame_jsons = sorted(scene_label_dir.glob("frame_*.json"))
+    if not frame_jsons:
+        raise RuntimeError(f"No frame_*.json annotations found under {scene_label_dir}")
+
+
+def print_label_warning(output_root: Path, scenes: Iterable[str]) -> None:
+    scene_list = ", ".join(scenes)
+    print(
+        "\nWarning: benchmark labels were not prepared for "
+        f"{scene_list}. Training/fusion can run, but eval_lerf_ovs.py requires:\n"
+        f"  {output_root}/label/<scene>/frame_*.json"
+    )
+
+
 def print_supported_scenes() -> None:
     print("Supported LERF-OVS scenes:")
     for scene in SCENE_NAMES:
@@ -392,8 +449,12 @@ def print_next_steps(output_root: Path, scenes: Iterable[str]) -> None:
     print("\nLERF-OVS scene(s) are ready:")
     for scene in scenes:
         print(f"  {output_root / scene}")
+        label_dir = output_root / "label" / scene
+        if label_dir.is_dir():
+            print(f"  {label_dir}")
     print("\nSuggested next step:")
-    print("  Point your training/evaluation config at one of the extracted scene directories.")
+    print("  Point your training config at one of the extracted scene directories.")
+    print("  For benchmark evaluation, also make sure output-root/label/<scene>/frame_*.json exists.")
 
 
 def main() -> int:
@@ -422,18 +483,40 @@ def main() -> int:
         )
         return 0
 
-    existing = [scene for scene in scenes if (args.output_root / scene).exists()]
-    if existing and not args.force:
-        logging.info(
-            "Skipping existing scene(s) without --force: %s",
-            ", ".join(existing),
-        )
-        remaining = [scene for scene in scenes if scene not in existing]
-    else:
-        remaining = list(scenes)
+    include_labels = not args.no_labels
+    existing: list[str] = []
+    remaining: list[str] = []
+    for scene in scenes:
+        scene_dir = args.output_root / scene
+        label_dir = args.output_root / "label" / scene
+        has_scene = scene_dir.exists()
+        has_labels = label_dir.exists()
+        if has_scene:
+            validate_scene_layout(scene_dir)
+        if has_labels and include_labels:
+            try:
+                validate_label_layout(label_dir)
+            except RuntimeError:
+                has_labels = False
 
-    for scene in existing:
-        validate_scene_layout(args.output_root / scene)
+        if args.force:
+            remaining.append(scene)
+            continue
+
+        if has_scene and (has_labels or not include_labels):
+            existing.append(scene)
+            continue
+
+        reason_parts = []
+        if not has_scene:
+            reason_parts.append("scene data missing")
+        if include_labels and not has_labels:
+            reason_parts.append("labels missing")
+        logging.info("Will prepare %s because %s.", scene, " and ".join(reason_parts))
+        remaining.append(scene)
+
+    if existing:
+        logging.info("Reusing existing prepared scene(s): %s", ", ".join(existing))
 
     if not remaining:
         print_next_steps(args.output_root, scenes)
@@ -456,15 +539,39 @@ def main() -> int:
             else:
                 logging.info("Reusing existing archive at %s", archive_path)
 
-        extract_counts = extract_scenes(archive_path, remaining, args.output_root, force=args.force)
+        extract_counts, label_counts = extract_scenes(
+            archive_path,
+            remaining,
+            args.output_root,
+            force=args.force,
+            include_labels=include_labels,
+        )
+        missing_labels: list[str] = []
         for scene in remaining:
             validate_scene_layout(args.output_root / scene)
             logging.info("Prepared scene %s at %s (%d archive entries)", scene, args.output_root / scene, extract_counts[scene])
+            if include_labels:
+                label_dir = args.output_root / "label" / scene
+                if label_counts[scene] > 0:
+                    validate_label_layout(label_dir)
+                    logging.info(
+                        "Prepared labels for %s at %s (%d archive entries)",
+                        scene,
+                        label_dir,
+                        label_counts[scene],
+                    )
+                elif label_dir.exists():
+                    validate_label_layout(label_dir)
+                    logging.info("Reused existing labels for %s at %s", scene, label_dir)
+                else:
+                    missing_labels.append(scene)
     finally:
         if temp_dir is not None:
             temp_dir.cleanup()
 
     print_next_steps(args.output_root, scenes)
+    if include_labels and missing_labels:
+        print_label_warning(args.output_root, missing_labels)
     return 0
 
 
