@@ -131,6 +131,8 @@ echo "[INFO] TF_NUM_INTEROP_THREADS=$TF_NUM_INTEROP_THREADS"
 for scene in "${SCENES[@]}"; do
   SCENE_PATH="$DATA_ROOT/$scene"
   SCENE_OUTPUT="$OUTPUT_ROOT/$scene"
+  SCENE_POINT_CLOUD_DIR="$SCENE_OUTPUT/point_cloud"
+  SCENE_TRAINED_PLY="$SCENE_POINT_CLOUD_DIR/iteration_${TRAIN_ITERS}/point_cloud.ply"
   SCENE_FUSION="$FUSION_ROOT/$scene"
   SCENE_LABEL="$LABEL_ROOT/$scene"
 
@@ -142,21 +144,28 @@ for scene in "${SCENES[@]}"; do
   echo "[INFO] ===== Scene: $scene | fusion.img_dim=$IMG_DIM ====="
 
   if [[ "$RUN_TRAIN" == "1" ]]; then
-    echo "[INFO] Training 3DGS for $scene"
-    python train.py \
-      scene.scene_path="$SCENE_PATH" \
-      scene.colmap_images=images \
-      scene.test_cameras=False \
-      train.exp_name="lerf_ovs/$scene" \
-      train.iterations="$TRAIN_ITERS" \
-      train.num_workers="$TRAIN_NUM_WORKERS" \
-      ${EXTRA_TRAIN_ARGS}
+    if [[ -f "$SCENE_TRAINED_PLY" ]]; then
+      echo "[INFO] Skipping train.py for $scene because trained 3DGS already exists: $SCENE_TRAINED_PLY"
+    else
+      if [[ -d "$SCENE_POINT_CLOUD_DIR" ]] && compgen -G "$SCENE_POINT_CLOUD_DIR/iteration_*" > /dev/null; then
+        echo "[INFO] Found existing 3DGS checkpoints for $scene under $SCENE_POINT_CLOUD_DIR, but missing target iteration_${TRAIN_ITERS}; continuing train.py"
+      fi
+      echo "[INFO] Training 3DGS for $scene"
+      python train.py \
+        scene.scene_path="$SCENE_PATH" \
+        scene.colmap_images=images \
+        scene.test_cameras=False \
+        train.exp_name="lerf_ovs/$scene" \
+        train.iterations="$TRAIN_ITERS" \
+        train.num_workers="$TRAIN_NUM_WORKERS" \
+        ${EXTRA_TRAIN_ARGS}
+    fi
   else
-    echo "[INFO] Skipping train.py for $scene"
+    echo "[INFO] Skipping train.py for $scene because RUN_TRAIN=$RUN_TRAIN"
   fi
 
   if [[ "$RUN_FUSION" == "1" ]]; then
-    require_path "$SCENE_OUTPUT/point_cloud" "trained point cloud directory for $scene"
+    require_path "$SCENE_POINT_CLOUD_DIR" "trained point cloud directory for $scene"
     echo "[INFO] Running fusion.py for $scene"
     python fusion.py \
       scene.scene_path="$SCENE_PATH" \
