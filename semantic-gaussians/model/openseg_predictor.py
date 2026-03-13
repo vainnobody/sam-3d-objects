@@ -3,6 +3,7 @@ import clip
 from tensorflow import io
 import tensorflow as tf2
 import tensorflow.compat.v1 as tf
+import os
 
 
 def read_bytes(path):
@@ -20,6 +21,12 @@ class OpenSeg:
         # set memory growth to avoid out of memory
         if weight_path is not None:
             print("Load Tensorflow OpenSeg model...")
+            intra_threads = os.environ.get("TF_NUM_INTRAOP_THREADS")
+            inter_threads = os.environ.get("TF_NUM_INTEROP_THREADS")
+            if intra_threads:
+                tf2.config.threading.set_intra_op_parallelism_threads(int(intra_threads))
+            if inter_threads:
+                tf2.config.threading.set_inter_op_parallelism_threads(int(inter_threads))
             gpus = tf.config.experimental.list_physical_devices("GPU")
             for gpu in gpus:
                 tf2.config.experimental.set_memory_growth(gpu, set_memory_growth)

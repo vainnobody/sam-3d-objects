@@ -55,6 +55,8 @@ def fuse_one_scene(config, model_2d):
         num_workers=config.fusion.num_workers,
     )
     xyz_cpu = gaussians._xyz.detach().cpu().numpy()
+    gc_collect_interval = max(0, int(config.fusion.get("gc_collect_interval", 10)))
+    empty_cache_interval = max(0, int(config.fusion.get("empty_cache_interval", 1)))
 
     # feature fusion
     with torch.no_grad():
@@ -189,8 +191,9 @@ def fuse_one_scene(config, model_2d):
                 del weight
                 del gt_path
                 del view
-                gc.collect()
-                if torch.cuda.is_available():
+                if gc_collect_interval > 0 and (idx + 1) % gc_collect_interval == 0:
+                    gc.collect()
+                if torch.cuda.is_available() and empty_cache_interval > 0 and (idx + 1) % empty_cache_interval == 0:
                     torch.cuda.empty_cache()
 
         gaussians._times[gaussians._times == 0] = 1e-5

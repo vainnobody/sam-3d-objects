@@ -24,6 +24,8 @@ model:
 fusion:
   img_dim: [648, 484]
   num_workers: 8
+  gc_collect_interval: 10
+  empty_cache_interval: 1
   model_2d: openseg
   clip_batch_size: 8
   depth: render

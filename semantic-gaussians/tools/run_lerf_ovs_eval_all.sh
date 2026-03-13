@@ -20,6 +20,16 @@ MASK_THRESH="${MASK_THRESH:-0.4}"
 RUN_TRAIN="${RUN_TRAIN:-1}"
 RUN_FUSION="${RUN_FUSION:-1}"
 RUN_EVAL="${RUN_EVAL:-1}"
+TRAIN_NUM_WORKERS="${TRAIN_NUM_WORKERS:-2}"
+FUSION_NUM_WORKERS="${FUSION_NUM_WORKERS:-2}"
+FUSION_GC_COLLECT_INTERVAL="${FUSION_GC_COLLECT_INTERVAL:-10}"
+FUSION_EMPTY_CACHE_INTERVAL="${FUSION_EMPTY_CACHE_INTERVAL:-1}"
+OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
+MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
+OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-1}"
+NUMEXPR_NUM_THREADS="${NUMEXPR_NUM_THREADS:-1}"
+TF_NUM_INTRAOP_THREADS="${TF_NUM_INTRAOP_THREADS:-1}"
+TF_NUM_INTEROP_THREADS="${TF_NUM_INTEROP_THREADS:-1}"
 EXTRA_TRAIN_ARGS="${EXTRA_TRAIN_ARGS:-}"
 EXTRA_FUSION_ARGS="${EXTRA_FUSION_ARGS:-}"
 EXTRA_EVAL_ARGS="${EXTRA_EVAL_ARGS:-}"
@@ -41,6 +51,16 @@ Environment overrides:
   RUN_TRAIN        1/0 whether to run train.py (default: 1)
   RUN_FUSION       1/0 whether to run fusion.py (default: 1)
   RUN_EVAL         1/0 whether to run eval_lerf_ovs.py (default: 1)
+  TRAIN_NUM_WORKERS train.py DataLoader workers (default: 2)
+  FUSION_NUM_WORKERS fusion.py DataLoader workers (default: 2)
+  FUSION_GC_COLLECT_INTERVAL run gc.collect() every N fusion steps (default: 10)
+  FUSION_EMPTY_CACHE_INTERVAL run torch.cuda.empty_cache() every N fusion steps (default: 1)
+  OMP_NUM_THREADS  CPU threads for OpenMP ops (default: 1)
+  MKL_NUM_THREADS  CPU threads for MKL ops (default: 1)
+  OPENBLAS_NUM_THREADS CPU threads for OpenBLAS ops (default: 1)
+  NUMEXPR_NUM_THREADS CPU threads for numexpr ops (default: 1)
+  TF_NUM_INTRAOP_THREADS TensorFlow intra-op threads (default: 1)
+  TF_NUM_INTEROP_THREADS TensorFlow inter-op threads (default: 1)
   EXTRA_TRAIN_ARGS Extra CLI overrides passed to train.py
   EXTRA_FUSION_ARGS Extra CLI overrides passed to fusion.py
   EXTRA_EVAL_ARGS  Extra CLI overrides passed to eval_lerf_ovs.py
@@ -88,12 +108,25 @@ PY
 
 cd "$SG_DIR"
 
+export OMP_NUM_THREADS MKL_NUM_THREADS OPENBLAS_NUM_THREADS NUMEXPR_NUM_THREADS
+export TF_NUM_INTRAOP_THREADS TF_NUM_INTEROP_THREADS
+
 echo "[INFO] DATA_ROOT=$DATA_ROOT"
 echo "[INFO] LABEL_ROOT=$LABEL_ROOT"
 echo "[INFO] OUTPUT_ROOT=$OUTPUT_ROOT"
 echo "[INFO] FUSION_ROOT=$FUSION_ROOT"
 echo "[INFO] EVAL_ROOT=$EVAL_ROOT"
 echo "[INFO] MODEL_2D=$MODEL_2D"
+echo "[INFO] TRAIN_NUM_WORKERS=$TRAIN_NUM_WORKERS"
+echo "[INFO] FUSION_NUM_WORKERS=$FUSION_NUM_WORKERS"
+echo "[INFO] FUSION_GC_COLLECT_INTERVAL=$FUSION_GC_COLLECT_INTERVAL"
+echo "[INFO] FUSION_EMPTY_CACHE_INTERVAL=$FUSION_EMPTY_CACHE_INTERVAL"
+echo "[INFO] OMP_NUM_THREADS=$OMP_NUM_THREADS"
+echo "[INFO] MKL_NUM_THREADS=$MKL_NUM_THREADS"
+echo "[INFO] OPENBLAS_NUM_THREADS=$OPENBLAS_NUM_THREADS"
+echo "[INFO] NUMEXPR_NUM_THREADS=$NUMEXPR_NUM_THREADS"
+echo "[INFO] TF_NUM_INTRAOP_THREADS=$TF_NUM_INTRAOP_THREADS"
+echo "[INFO] TF_NUM_INTEROP_THREADS=$TF_NUM_INTEROP_THREADS"
 
 for scene in "${SCENES[@]}"; do
   SCENE_PATH="$DATA_ROOT/$scene"
@@ -116,6 +149,7 @@ for scene in "${SCENES[@]}"; do
       scene.test_cameras=False \
       train.exp_name="lerf_ovs/$scene" \
       train.iterations="$TRAIN_ITERS" \
+      train.num_workers="$TRAIN_NUM_WORKERS" \
       ${EXTRA_TRAIN_ARGS}
   else
     echo "[INFO] Skipping train.py for $scene"
@@ -132,6 +166,9 @@ for scene in "${SCENES[@]}"; do
       fusion.out_dir="$SCENE_FUSION" \
       fusion.model_2d="$MODEL_2D" \
       fusion.img_dim="$IMG_DIM" \
+      fusion.num_workers="$FUSION_NUM_WORKERS" \
+      fusion.gc_collect_interval="$FUSION_GC_COLLECT_INTERVAL" \
+      fusion.empty_cache_interval="$FUSION_EMPTY_CACHE_INTERVAL" \
       ${EXTRA_FUSION_ARGS}
   else
     echo "[INFO] Skipping fusion.py for $scene"
