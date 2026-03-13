@@ -260,6 +260,132 @@ fusion_lerf_ovs/teatime/0.pt
 
 ---
 
+## OpenSeg / TensorFlow / cuDNN 常见环境故障
+
+如果你在 `MODEL_2D=openseg` 的 fusion / eval 过程中遇到 TensorFlow 或 cuDNN 相关报错，优先看这一节。
+
+### 典型报错 1：OpenSeg 在 `serving_default` 处失败
+
+常见现象：
+
+```text
+tensorflow.python.framework.errors_impl.UnimplementedError: Graph execution error
+Detected at node efficientnet-b7/.../Conv2D
+DNN library is not found
+```
+
+这类错误通常发生在：
+
+- `semantic-gaussians/fusion.py`
+- `semantic-gaussians/model/openseg_predictor.py`
+
+具体是 OpenSeg 的 TensorFlow SavedModel 在执行：
+
+```python
+self.model.signatures["serving_default"](...)
+```
+
+时，进入 EfficientNet backbone 的卷积算子，但当前环境里的 **cuDNN / CUDA 运行时不可用或不匹配**，所以 TensorFlow 图执行失败。
+
+### 典型报错 2：重装 TensorFlow 后，`import torch` 失败
+
+常见现象：
+
+```text
+ImportError: libcudnn.so.9: cannot open shared object file: No such file or directory
+```
+
+并且报错发生在：
+
+```python
+from torch._C import *
+```
+
+这通常说明你重装 TensorFlow 或 CUDA 相关依赖后，把同一个环境里的 **PyTorch / TensorFlow / CUDA / cuDNN** 版本关系打乱了。  
+PyTorch 现在尝试加载 `libcudnn.so.9`，但当前环境里没有这个版本，或者动态库搜索路径里找不到它。
+
+### 当前仓库预期的环境基线
+
+`semantic-gaussians/` 目录下的推荐基线是：
+
+- `semantic-gaussians/environment.yml`
+  - `python=3.9.18`
+  - `pytorch=2.1.1`
+  - `pytorch-cuda=11.8`
+- `semantic-gaussians/requirements.txt`
+  - `tensorflow[and-cuda]==2.14.0`
+
+如果你直接在现有环境里多次 `pip install` / `pip uninstall` TensorFlow、torch、nvidia-* 相关包，极容易出现：
+
+- TensorFlow 能 import，但 OpenSeg 推理时报 `DNN library is not found`
+- TensorFlow 装好后，PyTorch 反而因为 `libcudnn.so.X` 找不到而无法 import
+
+### 推荐排查顺序
+
+先运行仓库里新增的诊断脚本：
+
+```bash
+bash semantic-gaussians/tools/diagnose_openseg_env.sh
+```
+
+如果你想额外验证 OpenSeg SavedModel 的最小推理链路：
+
+```bash
+bash semantic-gaussians/tools/diagnose_openseg_env.sh \
+  --run-serving-test \
+  --image /path/to/test.jpg
+```
+
+然后按顺序检查：
+
+```bash
+nvidia-smi
+python -c "import tensorflow as tf; print(tf.__version__); print(tf.config.list_physical_devices('GPU'))"
+python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"
+```
+
+### 推荐修复策略
+
+#### 正式方案：重建干净环境
+
+最稳妥的方式不是继续在当前环境里补 `libcudnn.so.9`，而是**重建一个干净的 `semantic-gaussians` conda 环境**，然后按仓库预期重新安装：
+
+```bash
+cd semantic-gaussians
+conda env create -f environment.yml
+conda activate sega
+pip install -r requirements.txt
+```
+
+关键原则：
+
+- 不要在这个环境里额外安装另一版 `torch` / `torchvision`
+- 不要手工混装多套 `cudnn` / `nvidia-*` pip 包
+- 尽量让 `PyTorch + pytorch-cuda + TensorFlow` 保持和仓库文档一致
+
+#### 临时绕过方案：改用 LSeg
+
+如果你当前只是想先把 benchmark 主流程跑通，而不是立刻修好 OpenSeg，可以直接切到 `lseg`：
+
+```bash
+MODEL_2D=lseg bash semantic-gaussians/tools/run_lerf_ovs_eval_all.sh
+```
+
+如果 3DGS 已经训练好，只想重跑 fusion + eval：
+
+```bash
+MODEL_2D=lseg RUN_TRAIN=0 bash semantic-gaussians/tools/run_lerf_ovs_eval_all.sh
+```
+
+### 经验结论
+
+- `DNN library is not found` 基本不是 `train.py / fusion.py / eval_lerf_ovs.py` 的逻辑 bug，而是 **TensorFlow OpenSeg GPU 运行时问题**
+- `libcudnn.so.9` 缺失基本不是单个 Python 文件的问题，而是 **环境依赖栈冲突**
+- 如果你希望长期保留 `MODEL_2D=openseg`，优先选择 **重建一致环境**
+- 如果你只想先完成实验，`MODEL_2D=lseg` 是最省时的 fallback
+
+---
+
 ## 6. 第三步：运行 LERF-OVS benchmark evaluator
 
 本仓库新增脚本：
