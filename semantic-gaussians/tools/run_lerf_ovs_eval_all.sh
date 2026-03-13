@@ -134,6 +134,7 @@ for scene in "${SCENES[@]}"; do
   SCENE_POINT_CLOUD_DIR="$SCENE_OUTPUT/point_cloud"
   SCENE_TRAINED_PLY="$SCENE_POINT_CLOUD_DIR/iteration_${TRAIN_ITERS}/point_cloud.ply"
   SCENE_FUSION="$FUSION_ROOT/$scene"
+  SCENE_FUSION_FEATURE="$SCENE_FUSION/0.pt"
   SCENE_LABEL="$LABEL_ROOT/$scene"
 
   require_path "$SCENE_PATH" "scene data for $scene"
@@ -166,26 +167,33 @@ for scene in "${SCENES[@]}"; do
 
   if [[ "$RUN_FUSION" == "1" ]]; then
     require_path "$SCENE_POINT_CLOUD_DIR" "trained point cloud directory for $scene"
-    echo "[INFO] Running fusion.py for $scene"
-    python fusion.py \
-      scene.scene_path="$SCENE_PATH" \
-      scene.colmap_images=images \
-      scene.test_cameras=False \
-      model.model_dir="$SCENE_OUTPUT" \
-      fusion.out_dir="$SCENE_FUSION" \
-      fusion.model_2d="$MODEL_2D" \
-      fusion.img_dim="$IMG_DIM" \
-      fusion.num_workers="$FUSION_NUM_WORKERS" \
-      fusion.gc_collect_interval="$FUSION_GC_COLLECT_INTERVAL" \
-      fusion.empty_cache_interval="$FUSION_EMPTY_CACHE_INTERVAL" \
-      ${EXTRA_FUSION_ARGS}
+    if [[ -f "$SCENE_FUSION_FEATURE" ]]; then
+      echo "[INFO] Skipping fusion.py for $scene because semantic fusion output already exists: $SCENE_FUSION_FEATURE"
+    else
+      if [[ -d "$SCENE_FUSION" ]] && compgen -G "$SCENE_FUSION/*.pt" > /dev/null; then
+        echo "[INFO] Found existing fusion artifacts for $scene under $SCENE_FUSION, but missing expected output 0.pt; continuing fusion.py"
+      fi
+      echo "[INFO] Running fusion.py for $scene"
+      python fusion.py \
+        scene.scene_path="$SCENE_PATH" \
+        scene.colmap_images=images \
+        scene.test_cameras=False \
+        model.model_dir="$SCENE_OUTPUT" \
+        fusion.out_dir="$SCENE_FUSION" \
+        fusion.model_2d="$MODEL_2D" \
+        fusion.img_dim="$IMG_DIM" \
+        fusion.num_workers="$FUSION_NUM_WORKERS" \
+        fusion.gc_collect_interval="$FUSION_GC_COLLECT_INTERVAL" \
+        fusion.empty_cache_interval="$FUSION_EMPTY_CACHE_INTERVAL" \
+        ${EXTRA_FUSION_ARGS}
+    fi
   else
-    echo "[INFO] Skipping fusion.py for $scene"
+    echo "[INFO] Skipping fusion.py for $scene because RUN_FUSION=$RUN_FUSION"
   fi
 
   if [[ "$RUN_EVAL" == "1" ]]; then
     require_path "$SCENE_LABEL" "label directory for $scene"
-    require_path "$SCENE_FUSION/0.pt" "fusion output for $scene"
+    require_path "$SCENE_FUSION_FEATURE" "fusion output for $scene"
     echo "[INFO] Running eval_lerf_ovs.py for $scene"
     python eval_lerf_ovs.py \
       eval.scene_names="[$scene]" \
