@@ -40,6 +40,8 @@ def main(config):
         device = torch.device(config.model.device)
         feature_dtype = torch.float16 if str(config.render.feature_dtype).lower() == "fp16" else torch.float32
         semantic_downsample = max(1, int(config.render.semantic_resolution_divisor))
+        precompute_semantic = bool(config.render.precompute_semantic_on_start)
+        release_semantic_cache = bool(config.render.release_semantic_cache_when_inactive)
 
         # Load 3D Gaussians
         scene_config = deepcopy(config)
@@ -129,12 +131,13 @@ def main(config):
         w2c = scene_camera.world_view_transform.cpu().numpy().transpose()
         soft_save = None
         color_save = None
+        semantic_cache_dirty = precompute_semantic
+        editing_dirty = False
         
         # Initialize viser
         server = viser.ViserServer()
         server.world_axes.visible = False
         need_update = False
-        need_color_compute = True
         tab_group = server.add_gui_tab_group()
 
         # Settings tab
@@ -173,43 +176,40 @@ def main(config):
             nonlocal render_mode
             nonlocal need_update
             render_mode = gui_render_mode.value
+            if release_semantic_cache and render_mode in ("RGB", "Depth"):
+                clear_semantic_cache()
             need_update = True
 
         @gui_edit_mode.on_click
         def _(_) -> None:
             nonlocal edit_mode
-            nonlocal need_color_compute
             nonlocal need_update
             edit_mode = gui_edit_mode.value
-            need_color_compute = True
             need_update = True
 
         @gui_prompt_button.on_click
         def _(_) -> None:
-            nonlocal need_color_compute
+            nonlocal semantic_cache_dirty
             nonlocal need_update
-            need_color_compute = True
+            semantic_cache_dirty = True
+            clear_semantic_cache()
             need_update = True
 
         @gui_editing_button.on_click
         def _(_) -> None:
-            nonlocal need_color_compute
+            nonlocal editing_dirty
             nonlocal need_update
-            need_color_compute = True
+            editing_dirty = True
             need_update = True
 
         @gui_scale_slider.on_update
         def _(_) -> None:
-            nonlocal need_color_compute
             nonlocal need_update
-            need_color_compute = True
             need_update = True
 
         @resolution_scale_group.on_click
         def _(_) -> None:
-            nonlocal need_color_compute
             nonlocal need_update
-            need_color_compute = True
             need_update = True
 
         @gui_background_checkbox.on_update
@@ -236,15 +236,112 @@ def main(config):
         def _(client: viser.ClientHandle) -> None:
             print("new client!")
             nonlocal w2c
+            nonlocal need_update
             c2w_transform = SE3.from_matrix(w2c).inverse()
             client.camera.wxyz = c2w_transform.wxyz_xyz[:4]  # np.array([1.0, 0.0, 0.0, 0.0])
             client.camera.position = c2w_transform.wxyz_xyz[4:]
+            need_update = True
 
             # This will run whenever we get a new camera!
             @client.camera.on_update
             def _(_: viser.CameraHandle) -> None:
                 nonlocal need_update
                 need_update = True
+
+        def clear_semantic_cache():
+            nonlocal soft_save, color_save
+            soft_save = None
+            color_save = None
+
+        def ensure_semantic_cache(target_mode):
+            nonlocal soft_save, color_save, semantic_cache_dirty
+            need_soft = target_mode == "Semantic"
+            need_color = target_mode == "Relevancy"
+            if not semantic_cache_dirty:
+                if (not need_soft or soft_save is not None) and (not need_color or color_save is not None):
+                    return
+
+            text_model_cur = get_text_model()
+            labelset = ["other"] + get_text(gui_prompt_input.value.split(","))
+            feature_bank = get_feature_bank()
+            text_features = text_model_cur.extract_text_feature(labelset).to(dtype=feature_dtype)
+            label = torch.einsum("cq,dq->dc", text_features, feature_bank).argmax(dim=1)
+
+            if need_soft:
+                label_hard = torch.nn.functional.one_hot(label, num_classes=text_features.shape[0]).to(dtype=feature_dtype)
+                soft_save = torch.zeros((mask.shape[0], label_hard.shape[1]), dtype=feature_dtype, device=device)
+                soft_save[mask] = label_hard
+            if need_color:
+                palette_idx = label % len(colormap)
+                colors = colormap_cuda[palette_idx] / 255
+                color_save = torch.zeros((mask.shape[0], 3), dtype=feature_dtype, device=device)
+                color_save[mask] = colors
+
+            repeated_hex = (colormap_hex * ((len(labelset) + len(colormap_hex) - 1) // len(colormap_hex)))[: len(labelset)]
+            color_mapping = list(zip(labelset, repeated_hex))
+            content_head = "| | |\n|:-:|:-|"
+            content_body = "".join(
+                [
+                    f"\n|![color](https://via.placeholder.com/5x5/{color}/ffffff?text=+)|{label_name}||"
+                    for label_name, color in color_mapping
+                ]
+            )
+            gui_markdown.content = content_head + content_body
+
+            if features_gpu is None:
+                del feature_bank
+            del text_features, label
+            semantic_cache_dirty = False
+            torch.cuda.empty_cache()
+
+        def apply_editing():
+            nonlocal editing_dirty
+            restore_gaussians()
+            if gui_edit_input.value == "":
+                editing_dirty = False
+                return
+
+            text_model_cur = get_text_model()
+            feature_bank = get_feature_bank()
+            edit_terms = gui_edit_input.value.split(",")
+            preserve_terms = [x for x in gui_preserve_input.value.split(",") if x != ""]
+            len_edit = len(edit_terms)
+            edit_features = text_model_cur.extract_text_feature(["other"] + edit_terms + preserve_terms).to(
+                dtype=feature_dtype
+            )
+            sim = torch.einsum("cq,dq->dc", edit_features, feature_bank)
+            sim[sim < 0] = -2
+            label = sim.argmax(dim=1)
+
+            edit_mask = (label > 0) * (label <= len_edit)
+            if edit_mode == "Remove":
+                tmp = gaussians._opacity[mask]
+                tmp[edit_mask] = -9999
+                gaussians._opacity[mask] = tmp
+            elif edit_mode == "Color":
+                tmp = gaussians._features_dc[mask]
+                tmp_rgb = SH2RGB(tmp[edit_mask])
+                tmp_rgb = 1 - tmp_rgb
+                tmp_rgb = torch.clamp(tmp_rgb, 0, 1)
+                tmp[edit_mask] = RGB2SH(tmp_rgb)
+                gaussians._features_dc[mask] = tmp
+            elif edit_mode == "Size":
+                tmp = gaussians._scaling[mask]
+                tmp[edit_mask] *= 2
+                gaussians._scaling[mask] = tmp
+                tmp = gaussians._xyz[mask]
+                tmp[edit_mask] *= 2
+                gaussians._xyz[mask] = tmp
+            elif edit_mode == "Move":
+                tmp = gaussians._xyz[mask]
+                tmp[edit_mask] += 1
+                gaussians._xyz[mask] = tmp
+
+            if features_gpu is None:
+                del feature_bank
+            del edit_features, sim, label
+            editing_dirty = False
+            torch.cuda.empty_cache()
 
         # Main render function. Render if camera moves or settings change.
         if config.model.dynamic:
@@ -261,89 +358,16 @@ def main(config):
                 t = int(passed_frames % num_timesteps)
                 need_update = True
 
-            if not need_color_compute and not need_update:
+            if not editing_dirty and not need_update:
                 time.sleep(0.01)
                 continue
 
-            if need_color_compute:
-                # Compute text embeddings and relevancy
-                text_model_cur = get_text_model()
-                labelset = ["other"] + get_text(gui_prompt_input.value.split(","))
-                feature_bank = get_feature_bank()
-                text_features = text_model_cur.extract_text_feature(labelset).to(dtype=feature_dtype)
-                sim = torch.einsum("cq,dq->dc", text_features, feature_bank)
-                label_hard = torch.nn.functional.one_hot(sim.argmax(dim=1), num_classes=text_features.shape[0]).to(
-                    dtype=feature_dtype
-                )
-                soft_save = torch.zeros((mask.shape[0], label_hard.shape[1]), dtype=feature_dtype, device=device)
-                soft_save[mask] = label_hard
-                label = sim.argmax(dim=1)
-                palette_idx = label % len(colormap)
-                colors = colormap_cuda[palette_idx] / 255
-                color_save = torch.zeros((mask.shape[0], 3), dtype=feature_dtype, device=device)
-                color_save[mask] = colors
+            height = int(float(resolution_scale_group.value[:-1]) * scene_camera.image_height)
+            width = int(float(resolution_scale_group.value[:-1]) * scene_camera.image_width)
 
-                # Reset colormap tab
-                repeated_hex = (colormap_hex * ((len(labelset) + len(colormap_hex) - 1) // len(colormap_hex)))[: len(labelset)]
-                color_mapping = list(zip(labelset, repeated_hex))
-                content_head = "| | |\n|:-:|:-|"
-                content_body = "".join(
-                    [
-                        f"\n|![color](https://via.placeholder.com/5x5/{color}/ffffff?text=+)|{label_name}||"
-                        for label_name, color in color_mapping
-                    ]
-                )
-                gui_markdown.content = content_head + content_body
-
-                # Shape control
-                height = int(float(resolution_scale_group.value[:-1]) * scene_camera.image_height)
-                width = int(float(resolution_scale_group.value[:-1]) * scene_camera.image_width)
-
-                # Scene editing control
-                if gui_edit_input.value != "":
-                    len_edit = len(gui_edit_input.value.split(","))
-                    edit_features = text_model_cur.extract_text_feature(
-                        ["other"] + gui_edit_input.value.split(",") + gui_preserve_input.value.split(",")
-                    ).to(dtype=feature_dtype)
-                    sim = torch.einsum("cq,dq->dc", edit_features, feature_bank)
-                    sim[sim < 0] = -2
-                    label = sim.argmax(dim=1)
-                    restore_gaussians()
-
-                    edit_mask = (label > 0) * (label <= len_edit)
-                    if edit_mode == "Remove":
-                        tmp = gaussians._opacity[mask]
-                        tmp[edit_mask] = -9999
-                        gaussians._opacity[mask] = tmp
-                    elif edit_mode == "Color":
-                        tmp = gaussians._features_dc[mask]
-                        tmp_rgb = SH2RGB(tmp[edit_mask])  # [n_points, 1, 3]
-                        tmp_rgb = 1 - tmp_rgb
-                        tmp_rgb = torch.clamp(tmp_rgb, 0, 1)
-                        tmp[edit_mask] = RGB2SH(tmp_rgb)
-                        gaussians._features_dc[mask] = tmp
-                    elif edit_mode == "Size":
-                        tmp = gaussians._scaling[mask]
-                        tmp[edit_mask] *= 2
-                        gaussians._scaling[mask] = tmp
-                        tmp = gaussians._xyz[mask]
-                        tmp[edit_mask] *= 2
-                        gaussians._xyz[mask] = tmp
-                    elif edit_mode == "Move":
-                        tmp = gaussians._xyz[mask]
-                        tmp[edit_mask] += 1
-                        gaussians._xyz[mask] = tmp
-                else:
-                    restore_gaussians()
-
-                if features_gpu is None:
-                    del feature_bank
-                if gui_edit_input.value != "":
-                    del edit_features
-                del text_features, sim
-                need_color_compute = False
+            if editing_dirty:
+                apply_editing()
                 need_update = True
-                torch.cuda.empty_cache()
 
             # Render for each client
             for client in server.get_clients().values():
@@ -394,6 +418,7 @@ def main(config):
                     )
                     rendering = cv2.cvtColor(rendering.astype(np.uint8), cv2.COLOR_GRAY2RGB)
                 elif render_mode == "Semantic":
+                    ensure_semantic_cache("Semantic")
                     render_palette_cuda = colormap_cuda
                     if soft_save.shape[1] > colormap_cuda.shape[0]:
                         repeat = (soft_save.shape[1] + colormap_cuda.shape[0] - 1) // colormap_cuda.shape[0]
@@ -415,6 +440,7 @@ def main(config):
                     sem = render_palette(label, render_palette_cuda.reshape(-1))
                     rendering = sem.cpu().numpy().transpose(1, 2, 0)
                 else:  # relevancy
+                    ensure_semantic_cache("Relevancy")
                     output = render(
                         new_camera,
                         gaussians,
@@ -428,6 +454,8 @@ def main(config):
                     )
                     rendering = output["render"].cpu().numpy().transpose(1, 2, 0)
                 client.set_background_image(rendering)
+            if release_semantic_cache and render_mode in ("RGB", "Depth"):
+                clear_semantic_cache()
             need_update = False
 
 
@@ -441,6 +469,8 @@ if __name__ == "__main__":
                 "keep_edit_backup_on_gpu": False,
                 "lazy_text_model": True,
                 "semantic_resolution_divisor": 2,
+                "precompute_semantic_on_start": False,
+                "release_semantic_cache_when_inactive": True,
             }
         }
     )

@@ -29,3 +29,5 @@ render:
   keep_edit_backup_on_gpu: false
   lazy_text_model: true
   semantic_resolution_divisor: 2
+  precompute_semantic_on_start: false
+  release_semantic_cache_when_inactive: true
